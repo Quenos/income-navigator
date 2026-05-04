@@ -5,6 +5,9 @@ const eslintConfig = [
   ...nextVitals,
   ...nextTypescript,
   {
+    ignores: ['coverage/**', 'playwright-report/**', 'test-results/**'],
+  },
+  {
     rules: {
       'no-restricted-imports': [
         'error',

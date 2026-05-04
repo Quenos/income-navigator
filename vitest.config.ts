@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     setupFiles: ['./src/test/setup.ts'],
+    exclude: ['e2e/**', 'node_modules/**', '.next/**'],
     coverage: {
       provider: 'v8',
       include: ['src/domain/**/*.ts', 'src/server/**/*.ts', 'src/lib/**/*.ts'],

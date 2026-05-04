@@ -33,7 +33,7 @@ describe('scanner decision engine', () => {
   });
 
   it('does not allow Pass when trend regime is missing', () => {
-    const result = evaluateScannerSnapshot(fixture({ trendRegime: undefined }));
+    const result = evaluateScannerSnapshot(fixture({ trendRegime: 'Unclear' }));
     expect(result.primaryLabel).toBe('Manual Review');
     expect(result.reasons).toContain('Trend regime unclear');
   });
@@ -48,5 +48,21 @@ describe('scanner decision engine', () => {
     const result = evaluateScannerSnapshot(fixture({ calls: [] }));
     expect(result.primaryLabel).toBe('Insufficient Data');
     expect(result.reasons).toContain('Options-chain data unavailable');
+  });
+
+  it('does not select a regime-dependent short-call candidate for unclear regimes', () => {
+    const result = evaluateScannerSnapshot(fixture({ trendRegime: 'Unclear' }));
+    expect(result.primaryLabel).toBe('Manual Review');
+    expect(result.selectedShortCall).toBeUndefined();
+  });
+
+  it('includes detailed candidate calculation evidence', () => {
+    const result = evaluateScannerSnapshot(fixture());
+    expect(result.selectedShortCall).toMatchObject({
+      midPrice: 1.65,
+      intrinsicValue: 0,
+      bidExtrinsicValue: 1.6,
+    });
+    expect(result.selectedShortCall?.rawExtrinsicPercent).toBeCloseTo(0.016);
   });
 });

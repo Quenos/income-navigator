@@ -20,13 +20,17 @@ export interface TastytradeReadOnlyPort {
 
 export class TastytradeMarketDataProvider implements MarketDataProvider, TastytradeReadOnlyPort {
   readonly #session: ReadOnlySession | null;
+  readonly configured: boolean;
+  readonly isTest: boolean;
 
   constructor(config: TastytradeMarketDataProviderConfig = {}) {
+    this.configured = Boolean(config.providerSecret);
+    this.isTest = config.isTest ?? true;
     this.#session = config.providerSecret
       ? new ReadOnlySession({
           providerSecret: config.providerSecret,
           refreshToken: config.refreshToken,
-          isTest: config.isTest ?? true,
+          isTest: this.isTest,
         })
       : null;
   }

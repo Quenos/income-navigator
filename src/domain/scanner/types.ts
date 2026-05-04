@@ -2,12 +2,30 @@ export type PrimaryResultLabel = 'Pass' | 'Watch' | 'Fail' | 'Insufficient Data'
 export type ResultCondition = 'pass' | 'watch' | 'fail' | 'insufficient-data' | 'manual-review';
 export type TrendRegime = 'Strong Uptrend' | 'Neutral / Sideways' | 'Downtrend' | 'Unclear';
 export type AssetType = 'stock' | 'ETF' | 'preferred ETF' | 'unknown';
+export type MarketStatus = 'open' | 'closed' | 'unknown';
+export type Moneyness = 'OTM' | 'ATM' | 'ITM';
 
 export interface RuleOutcome {
   id: string;
   label: string;
   condition: ResultCondition;
   message: string;
+}
+
+export interface OptionCandidateEvidence {
+  symbol: string;
+  expiration: string;
+  dte: number;
+  strike: number;
+  delta?: number;
+  bid?: number;
+  ask?: number;
+  midPrice?: number;
+  intrinsicValue?: number;
+  bidExtrinsicValue?: number;
+  rawExtrinsicPercent?: number;
+  weeklyizedExtrinsic?: number;
+  moneyness?: Moneyness;
 }
 
 export interface ScannerResult {
@@ -19,11 +37,13 @@ export interface ScannerResult {
   notes: string[];
   reasons: string[];
   ruleOutcomes: RuleOutcome[];
+  selectedLongCall?: OptionCandidateEvidence;
+  selectedShortCall?: OptionCandidateEvidence;
   scanTime: string;
   quoteTime?: string;
   optionChainTime?: string;
   candleDataTime?: string;
-  marketStatus: 'open' | 'closed' | 'unknown';
+  marketStatus: MarketStatus;
 }
 
 export interface OptionContractSnapshot {
@@ -47,6 +67,7 @@ export interface TechnicalSnapshot {
   rsi14?: number;
   rsi14ThreeTradingDaysAgo?: number;
   candleDataTime?: string;
+  supportReversalKnown?: boolean;
 }
 
 export interface MarketDataSnapshot {
