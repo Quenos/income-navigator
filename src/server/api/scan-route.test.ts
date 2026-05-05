@@ -13,12 +13,14 @@ const scanMany = vi.fn(async (symbols: string[]) =>
 vi.mock('@/server/market-data/provider-factory', () => ({ createMarketDataProvider }));
 vi.mock('@/server/scanner/scan-service', () => ({ scanMany }));
 
-const { POST, resetScanRequestGateForTests } = await import('@/app/api/scan/route');
+const { POST, resetScanRequestGateForTests, scanRequestWindowCountForTests } =
+  await import('@/app/api/scan/route');
 
 describe('scan API route', () => {
   const originalEnv = { ...process.env };
 
   afterEach(() => {
+    vi.useRealTimers();
     process.env = { ...originalEnv };
     releaseScan?.();
     releaseScan = undefined;
@@ -35,6 +37,7 @@ describe('scan API route', () => {
 
   it('returns scanner results for posted tickers', async () => {
     process.env.SCANNER_PROVIDER = 'fake';
+    process.env.SCAN_TRUSTED_CLIENT_IP_HEADER = 'x-test-client-ip';
 
     const response = await POST(
       new Request('http://localhost/api/scan', {
@@ -87,11 +90,12 @@ describe('scan API route', () => {
     process.env.SCAN_MAX_REQUESTS_PER_WINDOW = '1';
     process.env.SCAN_RATE_LIMIT_WINDOW_MS = '60000';
     process.env.SCAN_MAX_ACTIVE_REQUESTS = '1';
+    process.env.SCAN_TRUSTED_CLIENT_IP_HEADER = 'x-test-client-ip';
 
     const invalid = await POST(
       new Request('http://localhost/api/scan', {
         method: 'POST',
-        headers: { 'x-forwarded-for': '203.0.113.30' },
+        headers: { 'x-test-client-ip': '203.0.113.30' },
         body: '{not-json',
       }),
     );
@@ -103,7 +107,7 @@ describe('scan API route', () => {
     const rateLimited = await POST(
       new Request('http://localhost/api/scan', {
         method: 'POST',
-        headers: { 'x-forwarded-for': '203.0.113.30' },
+        headers: { 'x-test-client-ip': '203.0.113.30' },
         body: JSON.stringify({ symbols: ['SPY'] }),
       }),
     );
@@ -112,7 +116,7 @@ describe('scan API route', () => {
     const differentClient = await POST(
       new Request('http://localhost/api/scan', {
         method: 'POST',
-        headers: { 'x-forwarded-for': '203.0.113.31' },
+        headers: { 'x-test-client-ip': '203.0.113.31' },
         body: JSON.stringify({ symbols: ['SPY'] }),
       }),
     );
@@ -122,11 +126,12 @@ describe('scan API route', () => {
   it('rejects repeated scan requests beyond the configured rate gate before provider setup', async () => {
     process.env.SCAN_MAX_REQUESTS_PER_WINDOW = '1';
     process.env.SCAN_RATE_LIMIT_WINDOW_MS = '60000';
+    process.env.SCAN_TRUSTED_CLIENT_IP_HEADER = 'x-test-client-ip';
 
     const first = await POST(
       new Request('http://localhost/api/scan', {
         method: 'POST',
-        headers: { 'x-forwarded-for': '203.0.113.10' },
+        headers: { 'x-test-client-ip': '203.0.113.10' },
         body: JSON.stringify({ symbols: ['SPY'] }),
       }),
     );
@@ -137,7 +142,7 @@ describe('scan API route', () => {
     const second = await POST(
       new Request('http://localhost/api/scan', {
         method: 'POST',
-        headers: { 'x-forwarded-for': '203.0.113.10' },
+        headers: { 'x-test-client-ip': '203.0.113.10' },
         body: JSON.stringify({ symbols: ['SPY'] }),
       }),
     );
@@ -146,6 +151,86 @@ describe('scan API route', () => {
     await expect(second.json()).resolves.toEqual({ error: 'Scan request limit exceeded' });
     expect(createMarketDataProvider).not.toHaveBeenCalled();
     expect(scanMany).not.toHaveBeenCalled();
+  });
+
+  it('rejects client-supplied forwarding header rotation as distinct public rate-limit keys', async () => {
+    process.env.SCAN_MAX_REQUESTS_PER_WINDOW = '1';
+    process.env.SCAN_RATE_LIMIT_WINDOW_MS = '60000';
+
+    const first = await POST(
+      new Request('http://localhost/api/scan', {
+        method: 'POST',
+        headers: { 'x-forwarded-for': '203.0.113.40', 'x-real-ip': '203.0.113.41' },
+        body: JSON.stringify({ symbols: ['SPY'] }),
+      }),
+    );
+    expect(first.status).toBe(200);
+    expect(scanRequestWindowCountForTests()).toBe(1);
+    createMarketDataProvider.mockClear();
+    scanMany.mockClear();
+
+    const spoofed = await POST(
+      new Request('http://localhost/api/scan', {
+        method: 'POST',
+        headers: { 'x-forwarded-for': '203.0.113.42', 'x-real-ip': '203.0.113.43' },
+        body: JSON.stringify({ symbols: ['QQQ'] }),
+      }),
+    );
+
+    expect(spoofed.status).toBe(429);
+    expect(scanRequestWindowCountForTests()).toBe(1);
+    expect(createMarketDataProvider).not.toHaveBeenCalled();
+    expect(scanMany).not.toHaveBeenCalled();
+  });
+
+  it('prunes expired scan rate-limit windows before storing new client keys', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-05T00:00:00.000Z'));
+    process.env.SCAN_MAX_REQUESTS_PER_WINDOW = '2';
+    process.env.SCAN_RATE_LIMIT_WINDOW_MS = '1000';
+    process.env.SCAN_TRUSTED_CLIENT_IP_HEADER = 'x-test-client-ip';
+
+    const first = await POST(
+      new Request('http://localhost/api/scan', {
+        method: 'POST',
+        headers: { 'x-test-client-ip': '203.0.113.50' },
+        body: JSON.stringify({ symbols: ['SPY'] }),
+      }),
+    );
+    expect(first.status).toBe(200);
+    expect(scanRequestWindowCountForTests()).toBe(1);
+
+    vi.setSystemTime(new Date('2026-05-05T00:00:02.000Z'));
+    const second = await POST(
+      new Request('http://localhost/api/scan', {
+        method: 'POST',
+        headers: { 'x-test-client-ip': '203.0.113.51' },
+        body: JSON.stringify({ symbols: ['QQQ'] }),
+      }),
+    );
+
+    expect(second.status).toBe(200);
+    expect(scanRequestWindowCountForTests()).toBe(1);
+  });
+
+  it('caps scan rate-limit windows with oldest-key eviction', async () => {
+    process.env.SCAN_MAX_REQUESTS_PER_WINDOW = '2';
+    process.env.SCAN_RATE_LIMIT_WINDOW_MS = '60000';
+    process.env.SCAN_MAX_RATE_LIMIT_KEYS = '2';
+    process.env.SCAN_TRUSTED_CLIENT_IP_HEADER = 'x-test-client-ip';
+
+    for (const ip of ['203.0.113.60', '203.0.113.61', '203.0.113.62']) {
+      const response = await POST(
+        new Request('http://localhost/api/scan', {
+          method: 'POST',
+          headers: { 'x-test-client-ip': ip },
+          body: JSON.stringify({ symbols: ['SPY'] }),
+        }),
+      );
+      expect(response.status).toBe(200);
+    }
+
+    expect(scanRequestWindowCountForTests()).toBe(2);
   });
 
   it('rejects concurrent scan requests beyond the configured active gate before provider setup', async () => {
@@ -160,7 +245,7 @@ describe('scan API route', () => {
     const first = POST(
       new Request('http://localhost/api/scan', {
         method: 'POST',
-        headers: { 'x-forwarded-for': '203.0.113.20' },
+        headers: { 'x-test-client-ip': '203.0.113.20' },
         body: JSON.stringify({ symbols: ['SPY'] }),
       }),
     );
@@ -171,7 +256,7 @@ describe('scan API route', () => {
     const second = await POST(
       new Request('http://localhost/api/scan', {
         method: 'POST',
-        headers: { 'x-forwarded-for': '203.0.113.21' },
+        headers: { 'x-test-client-ip': '203.0.113.21' },
         body: JSON.stringify({ symbols: ['QQQ'] }),
       }),
     );

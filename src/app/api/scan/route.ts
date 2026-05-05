@@ -7,6 +7,7 @@ const DEFAULT_MAX_SCAN_BODY_BYTES = 32_768;
 const DEFAULT_SCAN_MAX_ACTIVE_REQUESTS = 2;
 const DEFAULT_SCAN_RATE_LIMIT_WINDOW_MS = 60_000;
 const DEFAULT_SCAN_MAX_REQUESTS_PER_WINDOW = 20;
+const DEFAULT_SCAN_MAX_RATE_LIMIT_KEYS = 1_024;
 
 let activeScanRequests = 0;
 const scanRequestWindows = new Map<string, { count: number; resetAt: number }>();
@@ -16,9 +17,26 @@ function positiveIntegerFromEnv(name: string, fallback: number): number {
   return Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
-function scanClientKey(request: Request): string {
-  const forwardedFor = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
-  return forwardedFor || request.headers.get('x-real-ip') || 'anonymous';
+function trustedScanClientKey(request: Request): string {
+  const trustedHeader = process.env.SCAN_TRUSTED_CLIENT_IP_HEADER?.trim().toLowerCase();
+  if (!trustedHeader) return 'anonymous';
+
+  const trustedClientIp = request.headers.get(trustedHeader)?.split(',')[0]?.trim();
+  return trustedClientIp || 'anonymous';
+}
+
+function pruneExpiredScanRequestWindows(now: number): void {
+  for (const [key, window] of scanRequestWindows) {
+    if (window.resetAt <= now) scanRequestWindows.delete(key);
+  }
+}
+
+function enforceScanRequestWindowCap(maxKeys: number): void {
+  while (scanRequestWindows.size > maxKeys) {
+    const oldestKey = scanRequestWindows.keys().next().value;
+    if (!oldestKey) break;
+    scanRequestWindows.delete(oldestKey);
+  }
 }
 
 class ScanRequestTooLargeError extends Error {}
@@ -77,7 +95,9 @@ function tryAcquireScanRequestSlot(request: Request): boolean {
   if (activeScanRequests >= maxActive) return false;
 
   const now = Date.now();
-  const key = scanClientKey(request);
+  pruneExpiredScanRequestWindows(now);
+
+  const key = trustedScanClientKey(request);
   const windowMs = positiveIntegerFromEnv(
     'SCAN_RATE_LIMIT_WINDOW_MS',
     DEFAULT_SCAN_RATE_LIMIT_WINDOW_MS,
@@ -86,12 +106,18 @@ function tryAcquireScanRequestSlot(request: Request): boolean {
     'SCAN_MAX_REQUESTS_PER_WINDOW',
     DEFAULT_SCAN_MAX_REQUESTS_PER_WINDOW,
   );
+  const maxKeys = positiveIntegerFromEnv(
+    'SCAN_MAX_RATE_LIMIT_KEYS',
+    DEFAULT_SCAN_MAX_RATE_LIMIT_KEYS,
+  );
   const current = scanRequestWindows.get(key);
   const window = current && current.resetAt > now ? current : { count: 0, resetAt: now + windowMs };
 
   if (window.count >= maxRequests) return false;
   window.count += 1;
+  scanRequestWindows.delete(key);
   scanRequestWindows.set(key, window);
+  enforceScanRequestWindowCap(maxKeys);
   activeScanRequests += 1;
   return true;
 }
@@ -103,6 +129,10 @@ function releaseScanRequestSlot() {
 export function resetScanRequestGateForTests() {
   activeScanRequests = 0;
   scanRequestWindows.clear();
+}
+
+export function scanRequestWindowCountForTests() {
+  return scanRequestWindows.size;
 }
 
 export async function POST(request: Request) {
