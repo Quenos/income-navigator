@@ -31,37 +31,34 @@ test('partial provider failure does not block another ticker', async ({ page }) 
   await expect(page.getByText('Insufficient Data')).toBeVisible();
 });
 
-test('preset DPMCC universe scan sends all tickers and displays only pass results', async ({
+test('preset DPMCC universe scan runs tickers individually and displays current progress', async ({
   page,
 }) => {
-  let submittedSymbols: string[] = [];
+  const submittedBatches: string[][] = [];
+  let releaseFirstRequest!: () => void;
+  const firstRequestCanFinish = new Promise<void>((resolve) => {
+    releaseFirstRequest = resolve;
+  });
+
   await page.route('**/api/scan', async (route) => {
     const requestBody = route.request().postDataJSON() as { symbols: string[] };
-    submittedSymbols = requestBody.symbols;
+    submittedBatches.push(requestBody.symbols);
+    const symbol = requestBody.symbols[0] ?? 'UNKNOWN';
+
+    if (submittedBatches.length === 1) await firstRequestCanFinish;
+
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
         results: [
           {
-            symbol: 'SPY',
+            symbol,
             assetType: 'preferred ETF',
-            primaryLabel: 'Pass',
-            trendRegime: 'Strong Uptrend',
+            primaryLabel: symbol === 'SPY' ? 'Pass' : 'Fail',
+            trendRegime: symbol === 'SPY' ? 'Strong Uptrend' : 'Neutral / Sideways',
             currentPrice: 100,
             notes: [],
-            reasons: [],
-            ruleOutcomes: [],
-            scanTime: '2026-05-05T10:00:00.000Z',
-            marketStatus: 'open',
-          },
-          {
-            symbol: 'QQQ',
-            assetType: 'preferred ETF',
-            primaryLabel: 'Fail',
-            trendRegime: 'Neutral / Sideways',
-            currentPrice: 100,
-            notes: [],
-            reasons: ['No qualifying short call candidate'],
+            reasons: symbol === 'SPY' ? [] : ['No qualifying short call candidate'],
             ruleOutcomes: [],
             scanTime: '2026-05-05T10:00:00.000Z',
             marketStatus: 'open',
@@ -74,8 +71,15 @@ test('preset DPMCC universe scan sends all tickers and displays only pass result
   await page.goto('/');
   await page.getByRole('button', { name: /scan dpmcc etf universe/i }).click();
 
-  expect(submittedSymbols).toHaveLength(41);
-  expect(submittedSymbols).toEqual(expect.arrayContaining(['SPY', 'QQQ', 'IBIT']));
+  await expect(page.getByText('Scanning SPY (1 of 41)…')).toBeVisible();
+  expect(submittedBatches).toEqual([['SPY']]);
+
+  releaseFirstRequest();
+
+  await expect(page.getByText('Completed 41 of 41 tickers.')).toBeVisible();
+  expect(submittedBatches).toHaveLength(41);
+  expect(submittedBatches.every((batch) => batch.length === 1)).toBe(true);
+  expect(submittedBatches.flat()).toEqual(expect.arrayContaining(['SPY', 'QQQ', 'IBIT']));
   await expect(page.getByText(/showing pass results only/i)).toBeVisible();
   await expect(page.getByRole('heading', { name: 'SPY' })).toBeVisible();
   await expect(page.getByText('Criteria Match', { exact: true })).toBeVisible();

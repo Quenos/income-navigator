@@ -15,7 +15,7 @@ type ActiveScan = 'custom' | 'universe' | null;
 export function ScannerPage() {
   const [symbols, setSymbols] = useState<string[]>(['SPY']);
   const [activeScan, setActiveScan] = useState<ActiveScan>(null);
-  const { results, loading, error, passOnly, scan } = useScanner();
+  const { results, loading, error, passOnly, progress, scan } = useScanner();
 
   function addSymbol(symbol: string) {
     setSymbols((existing) => Array.from(new Set([...existing, symbol])));
@@ -29,7 +29,7 @@ export function ScannerPage() {
 
   async function runUniverseScan() {
     setActiveScan('universe');
-    await scan([...DPMCC_ETF_UNIVERSE], { passOnly: true });
+    await scan([...DPMCC_ETF_UNIVERSE], { passOnly: true, perTicker: true });
     setActiveScan(null);
   }
 
@@ -68,8 +68,16 @@ export function ScannerPage() {
         </div>
         <p className="text-sm text-slate-600">
           Universe scan checks {DPMCC_ETF_UNIVERSE.length} deduplicated liquid ETFs and displays
-          pass results only.
+          pass results only. Each ticker is scanned individually so live provider progress is
+          visible.
         </p>
+        {progress && progress.total > 0 && (
+          <p aria-live="polite" className="text-sm font-medium text-slate-700">
+            {progress.currentSymbol
+              ? `Scanning ${progress.currentSymbol} (${progress.completed + 1} of ${progress.total})…`
+              : `Completed ${progress.completed} of ${progress.total} tickers.`}
+          </p>
+        )}
         {error && <p className="text-sm text-rose-700">{error}</p>}
       </Card>
 
