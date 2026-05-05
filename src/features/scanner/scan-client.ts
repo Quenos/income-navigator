@@ -9,13 +9,37 @@ function getScanApiPath() {
   return `${basePath}/api/scan`;
 }
 
+function parseJsonBody(text: string): unknown {
+  if (!text.trim()) return {};
+  return JSON.parse(text) as unknown;
+}
+
+function scanFailureMessage(response: Response, body: unknown) {
+  if (body && typeof body === 'object' && 'error' in body && typeof body.error === 'string') {
+    return body.error;
+  }
+  return `Scan request failed (${response.status})`;
+}
+
 export async function runScanner(symbols: string[]): Promise<ScanResponse> {
   const response = await fetch(getScanApiPath(), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ symbols }),
   });
-  const body = (await response.json()) as ScanResponse | { error: string };
-  if (!response.ok) throw new Error('error' in body ? body.error : 'Scan request failed');
+
+  const responseText = await response.text();
+  let body: unknown;
+  try {
+    body = parseJsonBody(responseText);
+  } catch {
+    throw new Error(
+      response.ok
+        ? 'Scan API returned an invalid response'
+        : `Scan request failed (${response.status})`,
+    );
+  }
+
+  if (!response.ok) throw new Error(scanFailureMessage(response, body));
   return body as ScanResponse;
 }

@@ -53,6 +53,21 @@ test('partial provider failure does not block another ticker', async ({ page }) 
   await expect(page.getByText('Insufficient Data')).toBeVisible();
 });
 
+function scannerResult(symbol: string, primaryLabel: 'Pass' | 'Fail' = 'Fail') {
+  return {
+    symbol,
+    assetType: 'preferred ETF',
+    primaryLabel,
+    trendRegime: primaryLabel === 'Pass' ? 'Strong Uptrend' : 'Neutral / Sideways',
+    currentPrice: 100,
+    notes: [],
+    reasons: primaryLabel === 'Pass' ? [] : ['No qualifying short call candidate'],
+    ruleOutcomes: [],
+    scanTime: '2026-05-05T10:00:00.000Z',
+    marketStatus: 'open',
+  };
+}
+
 test('preset DPMCC universe scan runs tickers individually and displays current progress', async ({
   page,
 }) => {
@@ -72,20 +87,7 @@ test('preset DPMCC universe scan runs tickers individually and displays current 
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        results: [
-          {
-            symbol,
-            assetType: 'preferred ETF',
-            primaryLabel: symbol === 'SPY' ? 'Pass' : 'Fail',
-            trendRegime: symbol === 'SPY' ? 'Strong Uptrend' : 'Neutral / Sideways',
-            currentPrice: 100,
-            notes: [],
-            reasons: symbol === 'SPY' ? [] : ['No qualifying short call candidate'],
-            ruleOutcomes: [],
-            scanTime: '2026-05-05T10:00:00.000Z',
-            marketStatus: 'open',
-          },
-        ],
+        results: [scannerResult(symbol, symbol === 'SPY' ? 'Pass' : 'Fail')],
       }),
     });
   });
@@ -106,4 +108,43 @@ test('preset DPMCC universe scan runs tickers individually and displays current 
   await expect(page.getByRole('heading', { name: 'SPY' })).toBeVisible();
   await expect(page.getByText('Criteria Match', { exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'QQQ' })).toHaveCount(0);
+});
+
+test('preset DPMCC universe scan continues when one ticker returns non-JSON HTML', async ({
+  page,
+}) => {
+  const submittedBatches: string[][] = [];
+
+  await page.route('**/api/scan', async (route) => {
+    const requestBody = route.request().postDataJSON() as { symbols: string[] };
+    submittedBatches.push(requestBody.symbols);
+    const symbol = requestBody.symbols[0] ?? 'UNKNOWN';
+
+    if (symbol === 'SPY') {
+      await route.fulfill({
+        status: 504,
+        contentType: 'text/html',
+        body: '<html> <h1>Gateway Timeout</h1></html>',
+      });
+      return;
+    }
+
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        results: [scannerResult(symbol, symbol === 'QQQ' ? 'Pass' : 'Fail')],
+      }),
+    });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: /scan dpmcc etf universe/i }).click();
+
+  await expect(page.getByText('Completed 41 of 41 tickers.')).toBeVisible();
+  expect(submittedBatches).toHaveLength(41);
+  await expect(
+    page.getByText(/Some tickers could not be scanned \(1\): SPY: Scan request failed \(504\)/),
+  ).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'QQQ' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'SPY' })).toHaveCount(0);
 });
