@@ -15,6 +15,7 @@ import type {
   OptionContractSnapshot,
   TechnicalSnapshot,
 } from '@/domain/scanner';
+import { defaultScannerSettings } from '@/domain/scanner/settings';
 import type { MarketDataProvider, MarketDataProviderResult } from './market-data-provider';
 
 export interface TastytradeCandleSnapshot {
@@ -25,6 +26,12 @@ export interface TastytradeCandleSnapshot {
 export interface TastytradeGreekSnapshot {
   symbol: string;
   delta?: unknown;
+}
+
+interface LoadedOptionSnapshot {
+  option: Option;
+  quote?: MarketData;
+  greek?: TastytradeGreekSnapshot;
 }
 
 export interface TastytradeReadOnlyPort {
@@ -48,6 +55,11 @@ const REQUEST_TIMEOUT_MS = 7_500;
 const DAILY_CANDLE_COUNT = 260;
 const WEEKLY_CANDLE_COUNT = 40;
 const MAX_TASTYTRADE_SYMBOLS_PER_REQUEST = 100;
+const OPTION_DELTA_SCAN_MIN = 0.1;
+const OPTION_DELTA_SCAN_MAX = 0.9;
+const OPTION_DELTA_SCAN_BATCH_SIZE = 20;
+const MAX_SHORT_CALL_EXPIRATIONS_TO_SCAN = 2;
+const MAX_LONG_CALL_EXPIRATIONS_TO_SCAN = 1;
 
 function chunks<T>(items: readonly T[], size: number): T[][] {
   const result: T[][] = [];
@@ -160,6 +172,63 @@ function optionSymbol(option: Option): string | undefined {
 
 function optionKey(symbol: string): string {
   return symbol.replaceAll(' ', '').toUpperCase();
+}
+
+function optionStrike(option: Option): number | undefined {
+  return decimalToNumber(option.strike_price);
+}
+
+function optionDte(option: Option): number {
+  return option.days_to_expiration ?? 0;
+}
+
+function groupOptionsByExpiration(options: readonly Option[]): Option[][] {
+  const grouped = new Map<string, Option[]>();
+  for (const option of options) {
+    const key = expirationToYmd(option.expiration_date) ?? String(optionDte(option));
+    grouped.set(key, [...(grouped.get(key) ?? []), option]);
+  }
+  return [...grouped.values()].sort((a, b) => optionDte(a[0]) - optionDte(b[0]));
+}
+
+function scannerRelevantExpirationGroups(options: readonly Option[]): Option[][] {
+  const groups = groupOptionsByExpiration(options);
+  const shortDteMidpoint =
+    (defaultScannerSettings.shortCall.dte.min + defaultScannerSettings.shortCall.dte.max) / 2;
+  const shortDteGroups = groups
+    .filter((group) => {
+      const dte = optionDte(group[0]);
+      return (
+        dte >= defaultScannerSettings.shortCall.dte.min &&
+        dte <= defaultScannerSettings.shortCall.dte.max
+      );
+    })
+    .sort(
+      (a, b) =>
+        Math.abs(optionDte(a[0]) - shortDteMidpoint) - Math.abs(optionDte(b[0]) - shortDteMidpoint),
+    )
+    .slice(0, MAX_SHORT_CALL_EXPIRATIONS_TO_SCAN)
+    .sort((a, b) => optionDte(a[0]) - optionDte(b[0]));
+  const longDteGroups = groups
+    .filter((group) => optionDte(group[0]) >= defaultScannerSettings.longCall.minDte)
+    .sort(
+      (a, b) =>
+        Math.abs(optionDte(a[0]) - defaultScannerSettings.longCall.preferredDte) -
+        Math.abs(optionDte(b[0]) - defaultScannerSettings.longCall.preferredDte),
+    )
+    .slice(0, MAX_LONG_CALL_EXPIRATIONS_TO_SCAN)
+    .sort((a, b) => optionDte(a[0]) - optionDte(b[0]));
+  return [...shortDteGroups, ...longDteGroups];
+}
+
+function optionsNearAtmFirst(options: readonly Option[], stockPrice: number): Option[] {
+  return [...options].sort((a, b) => {
+    const aStrike = optionStrike(a) ?? Number.POSITIVE_INFINITY;
+    const bStrike = optionStrike(b) ?? Number.POSITIVE_INFINITY;
+    const distance = Math.abs(aStrike - stockPrice) - Math.abs(bStrike - stockPrice);
+    if (distance !== 0) return distance;
+    return aStrike - bStrike;
+  });
 }
 
 function simpleMovingAverage(values: number[], period: number): number | undefined {
@@ -429,6 +498,72 @@ export class TastytradeMarketDataProvider implements MarketDataProvider, Tastytr
     return this.#port.getWeeklyCandles(symbol);
   }
 
+  async #loadOptionBatch(options: readonly Option[]): Promise<LoadedOptionSnapshot[]> {
+    const symbols = options
+      .map((option) => optionSymbol(option))
+      .filter((symbol): symbol is string => Boolean(symbol));
+    if (symbols.length === 0) return [];
+
+    const [optionQuotes, optionGreeks] = await Promise.all([
+      this.getOptionMarketData(symbols),
+      this.getOptionGreeks(symbols).catch(() => []),
+    ]);
+    const quoteBySymbol = new Map(
+      optionQuotes.map((quote) => [optionKey(quote.symbol ?? ''), quote]),
+    );
+    const greekBySymbol = new Map(optionGreeks.map((greek) => [optionKey(greek.symbol), greek]));
+
+    return options.map((option) => {
+      const symbol = optionSymbol(option)!;
+      return {
+        option,
+        quote: quoteBySymbol.get(optionKey(symbol)),
+        greek: greekBySymbol.get(optionKey(symbol)),
+      };
+    });
+  }
+
+  async #loadRelevantCallOptions(
+    callInstruments: readonly Option[],
+    stockPrice?: number,
+  ): Promise<LoadedOptionSnapshot[]> {
+    const relevantGroups = scannerRelevantExpirationGroups(callInstruments);
+    const relevantByDte = relevantGroups.flat();
+    if (stockPrice === undefined) {
+      const bounded = relevantByDte.slice(0, MAX_TASTYTRADE_SYMBOLS_PER_REQUEST);
+      return this.#loadOptionBatch(bounded);
+    }
+
+    const loaded: LoadedOptionSnapshot[] = [];
+    for (const expirationOptions of relevantGroups) {
+      const ordered = optionsNearAtmFirst(expirationOptions, stockPrice);
+      let scannedBatches = 0;
+      for (const batch of chunks(ordered, OPTION_DELTA_SCAN_BATCH_SIZE)) {
+        scannedBatches += 1;
+        const loadedBatch = await this.#loadOptionBatch(batch);
+        loaded.push(...loadedBatch);
+
+        const deltas = loadedBatch
+          .map(({ greek, quote }) => decimalToNumber(greek?.delta) ?? decimalToNumber(quote?.delta))
+          .filter((delta): delta is number => delta !== undefined);
+        if (
+          scannedBatches >= 2 ||
+          (deltas.length > 0 &&
+            deltas.some((delta) => delta <= OPTION_DELTA_SCAN_MIN) &&
+            deltas.some((delta) => delta >= OPTION_DELTA_SCAN_MAX))
+        ) {
+          break;
+        }
+      }
+    }
+    return loaded.filter(({ greek, quote }) => {
+      const delta = decimalToNumber(greek?.delta) ?? decimalToNumber(quote?.delta);
+      return (
+        delta === undefined || (delta >= OPTION_DELTA_SCAN_MIN && delta <= OPTION_DELTA_SCAN_MAX)
+      );
+    });
+  }
+
   async getMarketDataForTicker(symbol: string): Promise<MarketDataProviderResult> {
     const normalized = symbol.trim().toUpperCase();
     if (!this.#port) {
@@ -473,37 +608,31 @@ export class TastytradeMarketDataProvider implements MarketDataProvider, Tastytr
         };
       }
 
-      const symbols = callInstruments.map((option) => optionSymbol(option)!);
-      const optionQuotes = await this.getOptionMarketData(symbols);
-      const optionGreeksResult = await this.getOptionGreeks(symbols)
-        .then((value) => ({ status: 'fulfilled' as const, value }))
-        .catch(() => ({ status: 'rejected' as const }));
+      const loadedOptions = await this.#loadRelevantCallOptions(
+        callInstruments,
+        marketDataPrice(equityQuote),
+      );
       const dailyCandlesResult = await this.getDailyCandles(normalized)
         .then((value) => ({ status: 'fulfilled' as const, value }))
         .catch(() => ({ status: 'rejected' as const }));
       const weeklyCandlesResult = await this.getWeeklyCandles(normalized)
         .then((value) => ({ status: 'fulfilled' as const, value }))
         .catch(() => ({ status: 'rejected' as const }));
-      const optionGreeks =
-        optionGreeksResult.status === 'fulfilled' ? optionGreeksResult.value : [];
       const dailyCandles =
         dailyCandlesResult.status === 'fulfilled' ? dailyCandlesResult.value : [];
       const weeklyCandles =
         weeklyCandlesResult.status === 'fulfilled' ? weeklyCandlesResult.value : [];
 
-      const quoteBySymbol = new Map(
-        optionQuotes.map((quote) => [optionKey(quote.symbol ?? ''), quote]),
-      );
-      const greekBySymbol = new Map(optionGreeks.map((greek) => [optionKey(greek.symbol), greek]));
       const optionChainTime =
-        optionQuotes.map(marketDataTime).find(Boolean) ??
+        loadedOptions
+          .map(({ quote }) => quote)
+          .map((quote) => quote && marketDataTime(quote))
+          .find(Boolean) ??
         marketDataTime(equityQuote) ??
         this.#now().toISOString();
 
-      const calls: OptionContractSnapshot[] = callInstruments.map((option) => {
+      const calls: OptionContractSnapshot[] = loadedOptions.map(({ option, quote, greek }) => {
         const symbol = optionSymbol(option)!;
-        const quote = quoteBySymbol.get(optionKey(symbol));
-        const greek = greekBySymbol.get(optionKey(symbol));
         return {
           symbol,
           expiration: expirationToYmd(option.expiration_date) ?? '',

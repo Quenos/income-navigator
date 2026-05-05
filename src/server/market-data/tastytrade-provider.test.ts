@@ -137,7 +137,14 @@ class ChunkSensitiveTastytradePort extends StubTastytradePort {
       await Promise.resolve();
       this.optionGreeksBatchSizes.push(symbols.length);
       if (symbols.length > 100) throw new Error('subscription batch too large');
-      return symbols.map((symbol) => ({ symbol, delta: symbol.includes('270116') ? 0.8 : 0.35 }));
+      return symbols.map((symbol) => {
+        const strikeCode = Number(/C(\d+)$/.exec(symbol.replaceAll(' ', ''))?.[1] ?? '100000');
+        const strike = strikeCode / 1000;
+        const delta = symbol.includes('270116')
+          ? 0.8
+          : Math.max(0.02, Math.min(0.98, 0.5 - (strike - 100) * 0.04));
+        return { symbol, delta };
+      });
     } finally {
       this.optionGreeksActive -= 1;
     }
@@ -262,7 +269,7 @@ describe('TastyTrade read-only adapter', () => {
     });
   });
 
-  it('chunks large option quote and greek requests to avoid TastyTrade request-URI limits', async () => {
+  it('lazily fetches option quotes and greeks only until the call delta window is bounded', async () => {
     const port = new ChunkSensitiveTastytradePort();
     const provider = new TastytradeMarketDataProvider({
       readOnlyPort: port,
@@ -272,8 +279,8 @@ describe('TastyTrade read-only adapter', () => {
     await expect(provider.getMarketDataForTicker('spy')).resolves.toMatchObject({ ok: true });
     expect(Math.max(...port.optionMarketDataBatchSizes)).toBeLessThanOrEqual(100);
     expect(Math.max(...port.optionGreeksBatchSizes)).toBeLessThanOrEqual(100);
-    expect(port.optionMarketDataBatchSizes.length).toBeGreaterThan(1);
-    expect(port.optionGreeksBatchSizes.length).toBeGreaterThan(1);
+    expect(port.optionMarketDataBatchSizes.reduce((sum, size) => sum + size, 0)).toBeLessThan(206);
+    expect(port.optionGreeksBatchSizes.reduce((sum, size) => sum + size, 0)).toBeLessThan(206);
     expect(port.maxOptionMarketDataActive).toBe(1);
     expect(port.maxOptionGreeksActive).toBe(1);
   });
