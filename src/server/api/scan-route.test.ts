@@ -67,6 +67,58 @@ describe('scan API route', () => {
     expect(scanMany).not.toHaveBeenCalled();
   });
 
+  it('rejects oversized bodies without content-length before JSON parsing or provider setup', async () => {
+    process.env.SCAN_MAX_BODY_BYTES = '32';
+    const request = new Request('http://localhost/api/scan', {
+      method: 'POST',
+      body: JSON.stringify({ symbols: ['SPY'], padding: 'x'.repeat(64) }),
+    });
+    expect(request.headers.get('content-length')).toBeNull();
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({ error: 'Scan request is too large' });
+    expect(createMarketDataProvider).not.toHaveBeenCalled();
+    expect(scanMany).not.toHaveBeenCalled();
+  });
+
+  it('applies the rate gate before parsing invalid JSON and releases the active slot', async () => {
+    process.env.SCAN_MAX_REQUESTS_PER_WINDOW = '1';
+    process.env.SCAN_RATE_LIMIT_WINDOW_MS = '60000';
+    process.env.SCAN_MAX_ACTIVE_REQUESTS = '1';
+
+    const invalid = await POST(
+      new Request('http://localhost/api/scan', {
+        method: 'POST',
+        headers: { 'x-forwarded-for': '203.0.113.30' },
+        body: '{not-json',
+      }),
+    );
+    expect(invalid.status).toBe(400);
+    await expect(invalid.json()).resolves.toEqual({ error: 'Invalid scan request' });
+    expect(createMarketDataProvider).not.toHaveBeenCalled();
+    expect(scanMany).not.toHaveBeenCalled();
+
+    const rateLimited = await POST(
+      new Request('http://localhost/api/scan', {
+        method: 'POST',
+        headers: { 'x-forwarded-for': '203.0.113.30' },
+        body: JSON.stringify({ symbols: ['SPY'] }),
+      }),
+    );
+    expect(rateLimited.status).toBe(429);
+
+    const differentClient = await POST(
+      new Request('http://localhost/api/scan', {
+        method: 'POST',
+        headers: { 'x-forwarded-for': '203.0.113.31' },
+        body: JSON.stringify({ symbols: ['SPY'] }),
+      }),
+    );
+    expect(differentClient.status).toBe(200);
+  });
+
   it('rejects repeated scan requests beyond the configured rate gate before provider setup', async () => {
     process.env.SCAN_MAX_REQUESTS_PER_WINDOW = '1';
     process.env.SCAN_RATE_LIMIT_WINDOW_MS = '60000';

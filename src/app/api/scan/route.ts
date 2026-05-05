@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { parseScanRequestBody, type NormalizedScanRequest } from '@/server/api/scan-schema';
+import { parseScanRequestBody } from '@/server/api/scan-schema';
 import { createMarketDataProvider } from '@/server/market-data/provider-factory';
 import { scanMany } from '@/server/scanner/scan-service';
 
@@ -21,14 +21,52 @@ function scanClientKey(request: Request): string {
   return forwardedFor || request.headers.get('x-real-ip') || 'anonymous';
 }
 
+class ScanRequestTooLargeError extends Error {}
+
+function maxScanBodyBytes(): number {
+  return positiveIntegerFromEnv('SCAN_MAX_BODY_BYTES', DEFAULT_MAX_SCAN_BODY_BYTES);
+}
+
 function contentLengthExceedsLimit(request: Request): boolean {
   const contentLength = request.headers.get('content-length');
   if (!contentLength) return false;
   const parsed = Number(contentLength);
-  return (
-    Number.isFinite(parsed) &&
-    parsed > positiveIntegerFromEnv('SCAN_MAX_BODY_BYTES', DEFAULT_MAX_SCAN_BODY_BYTES)
-  );
+  return Number.isFinite(parsed) && parsed > maxScanBodyBytes();
+}
+
+async function readJsonWithinScanBodyLimit(request: Request): Promise<unknown> {
+  const limit = maxScanBodyBytes();
+  const reader = request.body?.getReader();
+  if (!reader) return JSON.parse('');
+
+  const chunks: Uint8Array[] = [];
+  let bytesRead = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+
+      bytesRead += value.byteLength;
+      if (bytesRead > limit) {
+        await reader.cancel();
+        throw new ScanRequestTooLargeError('Scan request is too large');
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const body = new Uint8Array(bytesRead);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return JSON.parse(new TextDecoder().decode(body));
 }
 
 function tryAcquireScanRequestSlot(request: Request): boolean {
@@ -72,26 +110,33 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Scan request is too large' }, { status: 413 });
   }
 
-  let parsed: NormalizedScanRequest;
-  try {
-    parsed = parseScanRequestBody(await request.json());
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Invalid scan request' },
-      { status: 400 },
-    );
-  }
-
   if (!tryAcquireScanRequestSlot(request)) {
     return NextResponse.json({ error: 'Scan request limit exceeded' }, { status: 429 });
   }
 
   try {
-    const provider = createMarketDataProvider();
-    const results = await scanMany(parsed.symbols, provider, parsed.settings);
-    return NextResponse.json({ results });
-  } catch {
-    return NextResponse.json({ error: 'Scan request failed' }, { status: 500 });
+    const parsed = parseScanRequestBody(await readJsonWithinScanBodyLimit(request));
+
+    try {
+      const provider = createMarketDataProvider();
+      const results = await scanMany(parsed.symbols, provider, parsed.settings);
+      return NextResponse.json({ results });
+    } catch {
+      return NextResponse.json({ error: 'Scan request failed' }, { status: 500 });
+    }
+  } catch (error) {
+    if (error instanceof ScanRequestTooLargeError) {
+      return NextResponse.json({ error: 'Scan request is too large' }, { status: 413 });
+    }
+
+    if (error instanceof SyntaxError) {
+      return NextResponse.json({ error: 'Invalid scan request' }, { status: 400 });
+    }
+
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Invalid scan request' },
+      { status: 400 },
+    );
   } finally {
     releaseScanRequestSlot();
   }
