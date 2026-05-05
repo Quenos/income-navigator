@@ -16,6 +16,7 @@ import type {
   TechnicalSnapshot,
 } from '@/domain/scanner';
 import { defaultScannerSettings } from '@/domain/scanner/settings';
+import type { ScannerSettings } from '@/domain/scanner/settings';
 import type { MarketDataProvider, MarketDataProviderResult } from './market-data-provider';
 
 export interface TastytradeCandleSnapshot {
@@ -191,17 +192,16 @@ function groupOptionsByExpiration(options: readonly Option[]): Option[][] {
   return [...grouped.values()].sort((a, b) => optionDte(a[0]) - optionDte(b[0]));
 }
 
-function scannerRelevantExpirationGroups(options: readonly Option[]): Option[][] {
+function scannerRelevantExpirationGroups(
+  options: readonly Option[],
+  settings: ScannerSettings,
+): Option[][] {
   const groups = groupOptionsByExpiration(options);
-  const shortDteMidpoint =
-    (defaultScannerSettings.shortCall.dte.min + defaultScannerSettings.shortCall.dte.max) / 2;
+  const shortDteMidpoint = (settings.shortCall.dte.min + settings.shortCall.dte.max) / 2;
   const shortDteGroups = groups
     .filter((group) => {
       const dte = optionDte(group[0]);
-      return (
-        dte >= defaultScannerSettings.shortCall.dte.min &&
-        dte <= defaultScannerSettings.shortCall.dte.max
-      );
+      return dte >= settings.shortCall.dte.min && dte <= settings.shortCall.dte.max;
     })
     .sort(
       (a, b) =>
@@ -210,15 +210,31 @@ function scannerRelevantExpirationGroups(options: readonly Option[]): Option[][]
     .slice(0, MAX_SHORT_CALL_EXPIRATIONS_TO_SCAN)
     .sort((a, b) => optionDte(a[0]) - optionDte(b[0]));
   const longDteGroups = groups
-    .filter((group) => optionDte(group[0]) >= defaultScannerSettings.longCall.minDte)
+    .filter((group) => optionDte(group[0]) >= settings.longCall.minDte)
     .sort(
       (a, b) =>
-        Math.abs(optionDte(a[0]) - defaultScannerSettings.longCall.preferredDte) -
-        Math.abs(optionDte(b[0]) - defaultScannerSettings.longCall.preferredDte),
+        Math.abs(optionDte(a[0]) - settings.longCall.preferredDte) -
+        Math.abs(optionDte(b[0]) - settings.longCall.preferredDte),
     )
     .slice(0, MAX_LONG_CALL_EXPIRATIONS_TO_SCAN)
     .sort((a, b) => optionDte(a[0]) - optionDte(b[0]));
   return [...shortDteGroups, ...longDteGroups];
+}
+
+function scannerDeltaBounds(settings: ScannerSettings): { min: number; max: number } {
+  const neutralMin = Math.max(0, settings.shortCall.neutralTargetDelta - 0.05);
+  const neutralMax = Math.min(1, settings.shortCall.neutralTargetDelta + 0.05);
+  const bounds = [
+    { min: OPTION_DELTA_SCAN_MIN, max: OPTION_DELTA_SCAN_MAX },
+    settings.shortCall.strongUptrendDelta,
+    { min: neutralMin, max: neutralMax },
+    settings.shortCall.downtrendDelta,
+    settings.longCall.delta,
+  ];
+  return {
+    min: Math.max(0, Math.min(...bounds.map((bound) => bound.min))),
+    max: Math.min(1, Math.max(...bounds.map((bound) => bound.max))),
+  };
 }
 
 function optionsNearAtmFirst(options: readonly Option[], stockPrice: number): Option[] {
@@ -235,14 +251,18 @@ function optionDelta(snapshot: LoadedOptionSnapshot): number | undefined {
   return decimalToNumber(snapshot.greek?.delta) ?? decimalToNumber(snapshot.quote?.delta);
 }
 
-function loadedDeltasCoverScannerBands(loaded: readonly LoadedOptionSnapshot[]): boolean {
+function loadedDeltasCoverScannerBands(
+  loaded: readonly LoadedOptionSnapshot[],
+  settings: ScannerSettings,
+): boolean {
   const deltas = loaded
     .map((snapshot) => optionDelta(snapshot))
     .filter((delta): delta is number => delta !== undefined);
+  const bounds = scannerDeltaBounds(settings);
   return (
     deltas.length > 0 &&
-    deltas.some((delta) => delta <= OPTION_DELTA_SCAN_MIN + 1e-6) &&
-    deltas.some((delta) => delta >= OPTION_DELTA_SCAN_MAX - 1e-6)
+    deltas.some((delta) => delta <= bounds.min + 1e-6) &&
+    deltas.some((delta) => delta >= bounds.max - 1e-6)
   );
 }
 
@@ -540,9 +560,10 @@ export class TastytradeMarketDataProvider implements MarketDataProvider, Tastytr
 
   async #loadRelevantCallOptions(
     callInstruments: readonly Option[],
+    settings: ScannerSettings,
     stockPrice?: number,
   ): Promise<LoadedOptionSnapshot[]> {
-    const relevantGroups = scannerRelevantExpirationGroups(callInstruments);
+    const relevantGroups = scannerRelevantExpirationGroups(callInstruments, settings);
     const relevantByDte = relevantGroups.flat();
     if (stockPrice === undefined) {
       const bounded = relevantByDte.slice(0, MAX_TASTYTRADE_SYMBOLS_PER_REQUEST);
@@ -558,18 +579,20 @@ export class TastytradeMarketDataProvider implements MarketDataProvider, Tastytr
         loaded.push(...loadedBatch);
         loadedForExpiration.push(...loadedBatch);
 
-        if (loadedDeltasCoverScannerBands(loadedForExpiration)) break;
+        if (loadedDeltasCoverScannerBands(loadedForExpiration, settings)) break;
       }
     }
+    const bounds = scannerDeltaBounds(settings);
     return loaded.filter(({ greek, quote }) => {
       const delta = decimalToNumber(greek?.delta) ?? decimalToNumber(quote?.delta);
-      return (
-        delta === undefined || (delta >= OPTION_DELTA_SCAN_MIN && delta <= OPTION_DELTA_SCAN_MAX)
-      );
+      return delta === undefined || (delta >= bounds.min && delta <= bounds.max);
     });
   }
 
-  async getMarketDataForTicker(symbol: string): Promise<MarketDataProviderResult> {
+  async getMarketDataForTicker(
+    symbol: string,
+    settings: ScannerSettings = defaultScannerSettings,
+  ): Promise<MarketDataProviderResult> {
     const normalized = symbol.trim().toUpperCase();
     if (!this.#port) {
       return {
@@ -615,6 +638,7 @@ export class TastytradeMarketDataProvider implements MarketDataProvider, Tastytr
 
       const loadedOptions = await this.#loadRelevantCallOptions(
         callInstruments,
+        settings,
         marketDataPrice(equityQuote),
       );
       const dailyCandlesResult = await this.getDailyCandles(normalized)

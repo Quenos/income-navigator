@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { defaultScannerSettings } from '@/domain/scanner/settings';
 import { assertReadOnlyProviderSurface } from '@/lib/safety/readonly-boundary';
 import type { MarketData, Option } from 'tastytrade-ts-sdk/read-only';
 import { TastytradeMarketDataProvider, type TastytradeReadOnlyPort } from './tastytrade-provider';
@@ -190,6 +191,65 @@ class DenseLongCallTastytradePort extends StubTastytradePort {
   }
 }
 
+class CustomSettingsTastytradePort extends StubTastytradePort {
+  readonly optionGreeksBatchSizes: number[] = [];
+
+  async getOptionChain(): Promise<Record<string, Option[]>> {
+    return {
+      '2026-05-15': [
+        callOption({
+          symbol: 'SPY  260515C00105000',
+          days_to_expiration: 14,
+          strike_price: '105',
+        }),
+      ],
+      '2026-06-19': Array.from({ length: 41 }, (_, index) => {
+        const strike = 70 + index;
+        return callOption({
+          symbol: `SPY  260619C${String(strike * 1000).padStart(8, '0')}`,
+          streamer_symbol: `SPY260619C${String(strike * 1000).padStart(8, '0')}`,
+          expiration_date: '2026-06-19',
+          days_to_expiration: 46,
+          strike_price: String(strike),
+        });
+      }),
+      '2027-10-15': Array.from({ length: 41 }, (_, index) => {
+        const strike = 50 + index;
+        return callOption({
+          symbol: `SPY  271015C${String(strike * 1000).padStart(8, '0')}`,
+          streamer_symbol: `SPY271015C${String(strike * 1000).padStart(8, '0')}`,
+          expiration_date: '2027-10-15',
+          days_to_expiration: 529,
+          strike_price: String(strike),
+        });
+      }),
+    };
+  }
+
+  async getOptionMarketData(symbols: readonly string[]) {
+    return symbols.map((symbol) =>
+      marketData({
+        symbol,
+        bid: symbol.includes('271015') ? '41' : '0.4',
+        ask: symbol.includes('271015') ? '41.5' : '0.5',
+        updated_at: isoNow,
+      }),
+    );
+  }
+
+  async getOptionGreeks(symbols: readonly string[]) {
+    this.optionGreeksBatchSizes.push(symbols.length);
+    return symbols.map((symbol) => {
+      const strikeCode = Number(/C(\d+)$/.exec(symbol.replaceAll(' ', ''))?.[1] ?? '100000');
+      const strike = strikeCode / 1000;
+      const delta = symbol.includes('271015')
+        ? Math.max(0.55, Math.min(0.97, 1 - (strike - 50) * 0.01))
+        : Math.max(0.03, Math.min(0.85, 0.8 - (strike - 70) * 0.02));
+      return { symbol, delta };
+    });
+  }
+}
+
 class StreamerUnavailableTastytradePort extends StubTastytradePort {
   async getOptionMarketData(symbols: readonly string[]) {
     return symbols.map((symbol) =>
@@ -289,6 +349,51 @@ describe('TastyTrade read-only adapter', () => {
         ]),
       },
     });
+  });
+
+  it('uses custom scanner settings to load DTE and delta bands outside defaults', async () => {
+    const port = new CustomSettingsTastytradePort();
+    const provider = new TastytradeMarketDataProvider({
+      readOnlyPort: port,
+      now: () => new Date(isoNow),
+    });
+    const settings = {
+      ...defaultScannerSettings,
+      shortCall: {
+        ...defaultScannerSettings.shortCall,
+        dte: { min: 45, max: 60 },
+        strongUptrendDelta: { min: 0.05, max: 0.1 },
+      },
+      longCall: {
+        ...defaultScannerSettings.longCall,
+        minDte: 500,
+        preferredDte: 540,
+        delta: { min: 0.9, max: 0.95, ideal: 0.92 },
+      },
+    };
+
+    const result = await provider.getMarketDataForTicker('spy', settings);
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) throw new Error('expected custom-settings scan to succeed');
+    expect(result.snapshot.calls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          expiration: '2026-06-19',
+          dte: 46,
+          delta: expect.closeTo(0.1, 6),
+        }),
+        expect.objectContaining({
+          expiration: '2027-10-15',
+          dte: 529,
+          delta: expect.closeTo(0.93, 6),
+        }),
+      ]),
+    );
+    expect(result.snapshot.calls).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ dte: 14 })]),
+    );
+    expect(Math.max(...port.optionGreeksBatchSizes)).toBeLessThanOrEqual(100);
   });
 
   it('falls back to REST option quote deltas when dxLink streamer data is unavailable', async () => {

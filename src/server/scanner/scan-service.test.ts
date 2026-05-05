@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { defaultScannerSettings, type ScannerSettings } from '@/domain/scanner/settings';
 import { FakeMarketDataProvider } from '../market-data/fake-market-data-provider';
 import type {
   MarketDataProvider,
@@ -61,6 +62,35 @@ describe('scan service', () => {
 
     expect(result.reasons).toEqual(['Market data provider unavailable']);
     expect(result.ruleOutcomes[0]?.message).toBe('Market data provider unavailable');
+  });
+
+  it('passes request-specific scanner settings to the market data provider', async () => {
+    let receivedSettings: ScannerSettings | undefined;
+    const settings: ScannerSettings = {
+      ...defaultScannerSettings,
+      shortCall: {
+        ...defaultScannerSettings.shortCall,
+        dte: { min: 45, max: 60 },
+        strongUptrendDelta: { min: 0.05, max: 0.1 },
+      },
+    };
+
+    await scanTicker(
+      'SPY',
+      {
+        async getMarketDataForTicker(symbol, providerSettings) {
+          receivedSettings = providerSettings;
+          return {
+            ok: false,
+            symbol,
+            error: { code: 'ticker-not-found', message: 'not found' },
+          };
+        },
+      },
+      settings,
+    );
+
+    expect(receivedSettings).toBe(settings);
   });
 
   it('constrains scanMany provider concurrency and preserves result order', async () => {

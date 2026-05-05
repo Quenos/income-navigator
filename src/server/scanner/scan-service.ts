@@ -38,7 +38,7 @@ export async function scanTicker(
 ): Promise<ScannerResult> {
   const normalized = symbol.trim().toUpperCase();
   try {
-    const providerResult = await provider.getMarketDataForTicker(normalized);
+    const providerResult = await provider.getMarketDataForTicker(normalized, settings);
     if (!providerResult.ok)
       return resultFromProviderError(providerResult.symbol, providerResult.error);
     return evaluateScannerSnapshot(providerResult.snapshot, settings);

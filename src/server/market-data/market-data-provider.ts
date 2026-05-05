@@ -1,4 +1,5 @@
 import type { MarketDataSnapshot } from '@/domain/scanner';
+import type { ScannerSettings } from '@/domain/scanner/settings';
 
 export type MarketDataProviderErrorCode =
   | 'ticker-not-found'
@@ -15,7 +16,10 @@ export type MarketDataProviderResult =
   | { ok: false; symbol: string; error: MarketDataProviderError };
 
 export interface MarketDataProvider {
-  getMarketDataForTicker(symbol: string): Promise<MarketDataProviderResult>;
+  getMarketDataForTicker(
+    symbol: string,
+    settings?: ScannerSettings,
+  ): Promise<MarketDataProviderResult>;
 }
 
 export const forbiddenMarketDataProviderMethods = [

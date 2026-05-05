@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { defaultScannerSettings } from '@/domain/scanner/settings';
 import { MAX_SCAN_SYMBOLS } from '@/server/scanner/limits';
 
 const createMarketDataProvider = vi.fn(() => ({ provider: 'mock' }));
@@ -53,6 +54,47 @@ describe('scan API route', () => {
       expect.objectContaining({ symbol: 'SPY', primaryLabel: 'Pass' }),
       expect.objectContaining({ symbol: 'BAD', primaryLabel: 'Insufficient Data' }),
     ]);
+  });
+
+  it('forwards custom scan settings from public POST requests to scan evaluation', async () => {
+    const settings = {
+      ...defaultScannerSettings,
+      shortCall: {
+        ...defaultScannerSettings.shortCall,
+        dte: { min: 45, max: 60 },
+        strongUptrendDelta: { min: 0.05, max: 0.1 },
+      },
+      longCall: {
+        ...defaultScannerSettings.longCall,
+        minDte: 500,
+        preferredDte: 540,
+        delta: { min: 0.9, max: 0.95, ideal: 0.92 },
+      },
+    };
+
+    const response = await POST(
+      new Request('http://localhost/api/scan', {
+        method: 'POST',
+        body: JSON.stringify({ symbols: ['spy'], settings }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(scanMany).toHaveBeenCalledWith(
+      ['SPY'],
+      expect.anything(),
+      expect.objectContaining({
+        shortCall: expect.objectContaining({
+          dte: { min: 45, max: 60 },
+          strongUptrendDelta: { min: 0.05, max: 0.1 },
+        }),
+        longCall: expect.objectContaining({
+          minDte: 500,
+          preferredDte: 540,
+          delta: { min: 0.9, max: 0.95, ideal: 0.92 },
+        }),
+      }),
+    );
   });
 
   it('rejects oversized content-length before parsing JSON or creating a provider', async () => {
