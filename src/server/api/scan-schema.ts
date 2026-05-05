@@ -27,11 +27,31 @@ function normalizeSymbols(value: unknown): string[] {
   return symbols;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function mergeSettingsWithDefaults<T>(defaults: T, overrides: unknown, path = 'settings'): T {
+  if (!isRecord(defaults)) return (overrides === undefined ? defaults : overrides) as T;
+  if (overrides === undefined) return { ...(defaults as Record<string, unknown>) } as T;
+  if (!isRecord(overrides)) throw new Error(`${path} must be an object`);
+
+  const merged: Record<string, unknown> = { ...(defaults as Record<string, unknown>) };
+  for (const [key, value] of Object.entries(overrides)) {
+    const defaultValue = (defaults as Record<string, unknown>)[key];
+    merged[key] = isRecord(defaultValue)
+      ? mergeSettingsWithDefaults(defaultValue, value, `${path}.${key}`)
+      : value;
+  }
+  return merged as T;
+}
+
 export function parseScanRequestBody(body: unknown): NormalizedScanRequest {
   const record = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
-  const settings = record.settings
-    ? { ...defaultScannerSettings, ...(record.settings as Partial<ScannerSettings>) }
-    : defaultScannerSettings;
+  const settings = mergeSettingsWithDefaults<ScannerSettings>(
+    defaultScannerSettings,
+    record.settings,
+  );
   const validation = validateScannerSettings(settings);
   if (!validation.ok) throw new Error(validation.errors.join('; '));
   return { symbols: normalizeSymbols(record.symbols), settings };

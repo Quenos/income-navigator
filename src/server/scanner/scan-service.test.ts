@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { defaultScannerSettings, type ScannerSettings } from '@/domain/scanner/settings';
 import { FakeMarketDataProvider } from '../market-data/fake-market-data-provider';
 import type {
   MarketDataProvider,
@@ -11,9 +12,14 @@ class TrackingProvider implements MarketDataProvider {
   active = 0;
   maxActive = 0;
   readonly calls: string[] = [];
+  readonly settings: ScannerSettings[] = [];
 
-  async getMarketDataForTicker(symbol: string): Promise<MarketDataProviderResult> {
+  async getMarketDataForTicker(
+    symbol: string,
+    settings: ScannerSettings = defaultScannerSettings,
+  ): Promise<MarketDataProviderResult> {
     this.calls.push(symbol);
+    this.settings.push(settings);
     this.active += 1;
     this.maxActive = Math.max(this.maxActive, this.active);
     await new Promise((resolve) => setTimeout(resolve, 1));
@@ -75,5 +81,26 @@ describe('scan service', () => {
     expect(provider.maxActive).toBeLessThanOrEqual(MAX_SCAN_CONCURRENCY);
     expect(provider.calls).toEqual(symbols);
     expect(results.map((result) => result.symbol)).toEqual(symbols);
+  });
+
+  it('passes custom scanner settings into provider loading before evaluation', async () => {
+    const provider = new TrackingProvider();
+    const settings: ScannerSettings = {
+      ...defaultScannerSettings,
+      longCall: {
+        ...defaultScannerSettings.longCall,
+        delta: { min: 0.88, max: 0.95, ideal: 0.92 },
+        minDte: 500,
+        preferredDte: 540,
+      },
+      shortCall: {
+        ...defaultScannerSettings.shortCall,
+        dte: { min: 45, max: 60 },
+      },
+    };
+
+    await scanMany(['spy'], provider, settings);
+
+    expect(provider.settings).toEqual([settings]);
   });
 });

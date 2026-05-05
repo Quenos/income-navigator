@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { assertReadOnlyProviderSurface } from '@/lib/safety/readonly-boundary';
+import { defaultScannerSettings, type ScannerSettings } from '@/domain/scanner/settings';
 import type { MarketData, Option } from 'tastytrade-ts-sdk/read-only';
 import { TastytradeMarketDataProvider, type TastytradeReadOnlyPort } from './tastytrade-provider';
 
@@ -177,6 +178,59 @@ class StreamerUnavailableTastytradePort extends StubTastytradePort {
   }
 }
 
+class CustomSettingsTastytradePort extends StubTastytradePort {
+  readonly requestedOptionSymbols: string[] = [];
+
+  async getOptionChain(): Promise<Record<string, Option[]>> {
+    return {
+      '2026-05-15': [
+        callOption({
+          symbol: 'SPY  260515C00105000',
+          days_to_expiration: 14,
+          strike_price: '105',
+        }),
+      ],
+      '2026-06-26': [
+        callOption({
+          symbol: 'SPY  260626C00115000',
+          streamer_symbol: 'SPY260626C00115000',
+          expiration_date: '2026-06-26',
+          days_to_expiration: 56,
+          strike_price: '115',
+        }),
+      ],
+      '2027-10-15': [
+        callOption({
+          symbol: 'SPY  271015C00065000',
+          streamer_symbol: 'SPY271015C00065000',
+          expiration_date: '2027-10-15',
+          days_to_expiration: 529,
+          strike_price: '65',
+        }),
+      ],
+    };
+  }
+
+  async getOptionMarketData(symbols: readonly string[]) {
+    this.requestedOptionSymbols.push(...symbols);
+    return symbols.map((symbol) =>
+      marketData({
+        symbol,
+        bid: symbol.includes('271015') ? '36' : '1.6',
+        ask: symbol.includes('271015') ? '36.5' : '1.7',
+        updated_at: isoNow,
+      }),
+    );
+  }
+
+  async getOptionGreeks(symbols: readonly string[]) {
+    return symbols.map((symbol) => ({
+      symbol,
+      delta: symbol.includes('271015') ? 0.93 : symbol.includes('260626') ? 0.25 : 0.35,
+    }));
+  }
+}
+
 describe('TastyTrade read-only adapter', () => {
   it('implements MarketDataProvider without exposing trading or account surfaces', async () => {
     const provider = new TastytradeMarketDataProvider();
@@ -283,6 +337,41 @@ describe('TastyTrade read-only adapter', () => {
     expect(port.optionGreeksBatchSizes.reduce((sum, size) => sum + size, 0)).toBeLessThan(206);
     expect(port.maxOptionMarketDataActive).toBe(1);
     expect(port.maxOptionGreeksActive).toBe(1);
+  });
+
+  it('uses custom DTE and delta settings when selecting TastyTrade options', async () => {
+    const port = new CustomSettingsTastytradePort();
+    const provider = new TastytradeMarketDataProvider({
+      readOnlyPort: port,
+      now: () => new Date(isoNow),
+    });
+    const settings: ScannerSettings = {
+      ...defaultScannerSettings,
+      longCall: {
+        ...defaultScannerSettings.longCall,
+        minDte: 500,
+        preferredDte: 529,
+        delta: { min: 0.9, max: 0.95, ideal: 0.93 },
+      },
+      shortCall: {
+        ...defaultScannerSettings.shortCall,
+        dte: { min: 45, max: 60 },
+      },
+    };
+
+    const result = await provider.getMarketDataForTicker('spy', settings);
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) throw new Error('expected provider success');
+    expect(port.requestedOptionSymbols).toEqual(
+      expect.arrayContaining(['SPY  260626C00115000', 'SPY  271015C00065000']),
+    );
+    expect(result.snapshot.calls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ symbol: 'SPY  260626C00115000', dte: 56, delta: 0.25 }),
+        expect.objectContaining({ symbol: 'SPY  271015C00065000', dte: 529, delta: 0.93 }),
+      ]),
+    );
   });
 
   it('returns options-unavailable when TastyTrade confirms the underlying has no option chain', async () => {

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { defaultScannerSettings } from '@/domain/scanner/settings';
 import { MAX_SCAN_SYMBOLS } from '@/server/scanner/limits';
 
 const createMarketDataProvider = vi.fn(() => ({ provider: 'mock' }));
@@ -53,6 +54,54 @@ describe('scan API route', () => {
       expect.objectContaining({ symbol: 'SPY', primaryLabel: 'Pass' }),
       expect.objectContaining({ symbol: 'BAD', primaryLabel: 'Insufficient Data' }),
     ]);
+  });
+
+  it('deep-merges partial nested custom settings before scanning', async () => {
+    const response = await POST(
+      new Request('http://localhost/api/scan', {
+        method: 'POST',
+        body: JSON.stringify({
+          symbols: ['spy'],
+          settings: {
+            shortCall: { dte: { min: 45, max: 60 } },
+            longCall: { delta: { min: 0.9, max: 0.95, ideal: 0.93 } },
+          },
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(scanMany).toHaveBeenCalledWith(
+      ['SPY'],
+      { provider: 'mock' },
+      {
+        ...defaultScannerSettings,
+        shortCall: {
+          ...defaultScannerSettings.shortCall,
+          dte: { min: 45, max: 60 },
+        },
+        longCall: {
+          ...defaultScannerSettings.longCall,
+          delta: { min: 0.9, max: 0.95, ideal: 0.93 },
+        },
+      },
+    );
+  });
+
+  it('returns a controlled error for invalid nested settings shape', async () => {
+    const response = await POST(
+      new Request('http://localhost/api/scan', {
+        method: 'POST',
+        body: JSON.stringify({ symbols: ['SPY'], settings: { shortCall: null } }),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: 'settings.shortCall must be an object',
+    });
+    expect(createMarketDataProvider).not.toHaveBeenCalled();
+    expect(scanMany).not.toHaveBeenCalled();
   });
 
   it('rejects oversized content-length before parsing JSON or creating a provider', async () => {
