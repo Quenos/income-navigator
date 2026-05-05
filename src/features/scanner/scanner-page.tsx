@@ -12,6 +12,18 @@ import { useScanner } from './use-scanner';
 
 type ActiveScan = 'custom' | 'universe' | null;
 
+const UNIVERSE_SCAN_BATCH_SIZE = 5;
+
+function progressText(progress: { completed: number; total: number; currentSymbol?: string }) {
+  if (!progress.currentSymbol)
+    return `Completed ${progress.completed} of ${progress.total} tickers.`;
+  const end = Math.min(
+    progress.completed + progress.currentSymbol.split(', ').length,
+    progress.total,
+  );
+  return `Scanning ${progress.currentSymbol} (${progress.completed + 1}-${end} of ${progress.total})…`;
+}
+
 export function ScannerPage() {
   const [symbols, setSymbols] = useState<string[]>(['SPY']);
   const [activeScan, setActiveScan] = useState<ActiveScan>(null);
@@ -29,7 +41,11 @@ export function ScannerPage() {
 
   async function runUniverseScan() {
     setActiveScan('universe');
-    await scan([...DPMCC_ETF_UNIVERSE], { passOnly: true, perTicker: true });
+    await scan([...DPMCC_ETF_UNIVERSE], {
+      passOnly: true,
+      perTicker: true,
+      batchSize: UNIVERSE_SCAN_BATCH_SIZE,
+    });
     setActiveScan(null);
   }
 
@@ -68,14 +84,12 @@ export function ScannerPage() {
         </div>
         <p className="text-sm text-slate-600">
           Universe scan checks {DPMCC_ETF_UNIVERSE.length} deduplicated liquid ETFs and displays
-          pass results only. Each ticker is scanned individually so live provider progress is
-          visible.
+          pass results only. Tickers are scanned in groups of {UNIVERSE_SCAN_BATCH_SIZE} so the live
+          provider can process each group in parallel while progress remains visible.
         </p>
         {progress && progress.total > 0 && (
           <p aria-live="polite" className="text-sm font-medium text-slate-700">
-            {progress.currentSymbol
-              ? `Scanning ${progress.currentSymbol} (${progress.completed + 1} of ${progress.total})…`
-              : `Completed ${progress.completed} of ${progress.total} tickers.`}
+            {progressText(progress)}
           </p>
         )}
         {error && <p className="text-sm text-rose-700">{error}</p>}

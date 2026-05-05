@@ -68,7 +68,7 @@ function scannerResult(symbol: string, primaryLabel: 'Pass' | 'Fail' = 'Fail') {
   };
 }
 
-test('preset DPMCC universe scan runs tickers individually and displays current progress', async ({
+test('preset DPMCC universe scan runs tickers in bounded parallel groups and displays progress', async ({
   page,
 }) => {
   const submittedBatches: string[][] = [];
@@ -80,14 +80,15 @@ test('preset DPMCC universe scan runs tickers individually and displays current 
   await page.route('**/api/scan', async (route) => {
     const requestBody = route.request().postDataJSON() as { symbols: string[] };
     submittedBatches.push(requestBody.symbols);
-    const symbol = requestBody.symbols[0] ?? 'UNKNOWN';
 
     if (submittedBatches.length === 1) await firstRequestCanFinish;
 
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        results: [scannerResult(symbol, symbol === 'SPY' ? 'Pass' : 'Fail')],
+        results: requestBody.symbols.map((symbol) =>
+          scannerResult(symbol, symbol === 'SPY' ? 'Pass' : 'Fail'),
+        ),
       }),
     });
   });
@@ -95,14 +96,15 @@ test('preset DPMCC universe scan runs tickers individually and displays current 
   await page.goto('/');
   await page.getByRole('button', { name: /scan dpmcc etf universe/i }).click();
 
-  await expect(page.getByText('Scanning SPY (1 of 41)…')).toBeVisible();
-  expect(submittedBatches).toEqual([['SPY']]);
+  await expect(page.getByText('Scanning SPY, QQQ, DIA, IWM, VTI (1-5 of 41)…')).toBeVisible();
+  expect(submittedBatches).toEqual([['SPY', 'QQQ', 'DIA', 'IWM', 'VTI']]);
 
   releaseFirstRequest();
 
   await expect(page.getByText('Completed 41 of 41 tickers.')).toBeVisible();
-  expect(submittedBatches).toHaveLength(41);
-  expect(submittedBatches.every((batch) => batch.length === 1)).toBe(true);
+  expect(submittedBatches).toHaveLength(9);
+  expect(submittedBatches.slice(0, 8).every((batch) => batch.length === 5)).toBe(true);
+  expect(submittedBatches.at(-1)).toEqual(['IBIT']);
   expect(submittedBatches.flat()).toEqual(expect.arrayContaining(['SPY', 'QQQ', 'IBIT']));
   await expect(page.getByText(/showing pass results only/i)).toBeVisible();
   await expect(page.getByRole('heading', { name: 'SPY' })).toBeVisible();
@@ -118,9 +120,8 @@ test('preset DPMCC universe scan continues when one ticker returns non-JSON HTML
   await page.route('**/api/scan', async (route) => {
     const requestBody = route.request().postDataJSON() as { symbols: string[] };
     submittedBatches.push(requestBody.symbols);
-    const symbol = requestBody.symbols[0] ?? 'UNKNOWN';
 
-    if (symbol === 'SPY') {
+    if (requestBody.symbols.includes('SPY')) {
       await route.fulfill({
         status: 504,
         contentType: 'text/html',
@@ -132,7 +133,9 @@ test('preset DPMCC universe scan continues when one ticker returns non-JSON HTML
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        results: [scannerResult(symbol, symbol === 'QQQ' ? 'Pass' : 'Fail')],
+        results: requestBody.symbols.map((batchSymbol) =>
+          scannerResult(batchSymbol, batchSymbol === 'XLF' ? 'Pass' : 'Fail'),
+        ),
       }),
     });
   });
@@ -141,10 +144,12 @@ test('preset DPMCC universe scan continues when one ticker returns non-JSON HTML
   await page.getByRole('button', { name: /scan dpmcc etf universe/i }).click();
 
   await expect(page.getByText('Completed 41 of 41 tickers.')).toBeVisible();
-  expect(submittedBatches).toHaveLength(41);
+  expect(submittedBatches).toHaveLength(9);
   await expect(
-    page.getByText(/Some tickers could not be scanned \(1\): SPY: Scan request failed \(504\)/),
+    page.getByText(
+      /Some tickers could not be scanned \(5\): SPY: Scan request failed \(504\); QQQ: Scan request failed \(504\); DIA: Scan request failed \(504\); …/,
+    ),
   ).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'QQQ' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'XLF' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'SPY' })).toHaveCount(0);
 });

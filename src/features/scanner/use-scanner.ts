@@ -7,6 +7,7 @@ import { runScanner } from './scan-client';
 export interface ScanOptions {
   passOnly?: boolean;
   perTicker?: boolean;
+  batchSize?: number;
 }
 
 export interface ScanProgress {
@@ -27,6 +28,18 @@ function summarizeTickerFailures(failures: string[]) {
   const examples = failures.slice(0, 3).join('; ');
   const suffix = failures.length > 3 ? '; …' : '';
   return `Some tickers could not be scanned (${failures.length}): ${examples}${suffix}`;
+}
+
+function chunks<T>(items: readonly T[], size: number): T[][] {
+  const result: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    result.push(items.slice(index, index + size));
+  }
+  return result;
+}
+
+function scanBatchLabel(symbols: readonly string[]) {
+  return symbols.join(', ');
 }
 
 export function useScanner() {
@@ -50,16 +63,23 @@ export function useScanner() {
     try {
       if (options.perTicker) {
         const failures: string[] = [];
-        for (const [index, symbol] of uniqueSymbols.entries()) {
-          setProgress({ completed: index, total: uniqueSymbols.length, currentSymbol: symbol });
+        const batchSize = Math.max(1, Math.floor(options.batchSize ?? 1));
+        let completed = 0;
+        for (const batch of chunks(uniqueSymbols, batchSize)) {
+          setProgress({
+            completed,
+            total: uniqueSymbols.length,
+            currentSymbol: scanBatchLabel(batch),
+          });
           try {
-            const response = await runScanner([symbol]);
+            const response = await runScanner(batch);
             const nextResults = filterResults(response.results, Boolean(options.passOnly));
             setResults((existing) => [...existing, ...nextResults]);
           } catch (err) {
-            failures.push(`${symbol}: ${scanErrorMessage(err)}`);
+            for (const symbol of batch) failures.push(`${symbol}: ${scanErrorMessage(err)}`);
           }
-          setProgress({ completed: index + 1, total: uniqueSymbols.length });
+          completed += batch.length;
+          setProgress({ completed, total: uniqueSymbols.length });
         }
         if (failures.length > 0) setError(summarizeTickerFailures(failures));
         return;
