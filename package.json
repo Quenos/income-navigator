@@ -3,7 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "income-navigator": "src/cli/main.ts"
+  },
   "scripts": {
+    "cli": "tsx src/cli/main.ts",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
@@ -22,15 +26,16 @@
   },
   "dependencies": {
     "@tailwindcss/postcss": "latest",
+    "clsx": "latest",
     "next": "latest",
     "react": "latest",
     "react-dom": "latest",
-    "tastytrade-ts-sdk": "file:vendor/tastytrade-ts-sdk-0.1.0.tgz",
-    "clsx": "latest",
-    "tailwind-merge": "latest"
+    "tailwind-merge": "latest",
+    "tastytrade-ts-sdk": "file:vendor/tastytrade-ts-sdk-0.1.0.tgz"
   },
   "devDependencies": {
     "@eslint/eslintrc": "latest",
+    "@playwright/test": "latest",
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
@@ -39,9 +44,9 @@
     "eslint-config-next": "latest",
     "prettier": "latest",
     "tailwindcss": "latest",
+    "tsx": "^4.21.0",
     "typescript": "latest",
-    "vitest": "latest",
-    "@playwright/test": "latest"
+    "vitest": "latest"
   },
   "overrides": {
     "postcss": "^8.5.14"

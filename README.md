@@ -38,6 +38,29 @@ The TastyTrade provider is read-only behind `MarketDataProvider`. It fetches the
 
 Never put credentials in git, logs, docs, fixtures, screenshots, or test output.
 
+## CLI
+
+Run scans from the terminal with the same read-only provider selected by `SCANNER_PROVIDER`:
+
+```bash
+# Explicit tickers with progress status on stderr and a table on stdout
+SCANNER_PROVIDER=fake npm run cli -- scan SPY QQQ
+
+# Full DPMCC ETF universe, showing only pass results
+SCANNER_PROVIDER=fake npm run cli -- scan --universe dpmcc --pass-only
+
+# Machine-readable output
+SCANNER_PROVIDER=fake npm run cli -- scan SPY --json
+```
+
+The installed package bin is also named `income-navigator`, so local package execution works after `npm install`:
+
+```bash
+SCANNER_PROVIDER=fake npm exec -- income-navigator scan SPY QQQ
+```
+
+The CLI scans sequentially and prints the active ticker status, for example `Scanning SPY (1 of 41)…`, before each provider call. Use `SCANNER_PROVIDER=tastytrade` with the TastyTrade environment variables above for live read-only market data.
+
 ## Verification
 
 Local quality gate:
