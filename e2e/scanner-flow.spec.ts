@@ -1,5 +1,9 @@
 import { expect, test } from '@playwright/test';
 
+const LIVE_PROVIDER_ENABLED = process.env.SCANNER_PROVIDER === 'tastytrade';
+
+test.setTimeout(420_000);
+
 test('ticker entry normalizes, deduplicates, and removes symbols', async ({ page }) => {
   await page.goto('/');
   await page.getByLabel(/ticker symbol/i).fill('spy');
@@ -12,7 +16,20 @@ test('ticker entry normalizes, deduplicates, and removes symbols', async ({ page
   await expect(page.getByLabel(/selected tickers/i).getByText('QQQ')).toHaveCount(0);
 });
 
+test('E2E uses the live TastyTrade provider when credentials are available', async ({ page }) => {
+  test.skip(!LIVE_PROVIDER_ENABLED, 'Live TastyTrade credentials are not configured.');
+
+  await page.goto('/');
+  expect(process.env.SCANNER_PROVIDER).toBe('tastytrade');
+  await expect(page.getByRole('heading', { name: 'Dynamic PMCC Scanner' })).toBeVisible();
+});
+
 test('run scan displays criteria match result from API', async ({ page }) => {
+  test.skip(
+    LIVE_PROVIDER_ENABLED,
+    'Deterministic result assertions only run without live credentials.',
+  );
+
   await page.goto('/');
   await page.getByRole('button', { name: /run scan/i }).click();
   await expect(page.getByText(/scanning/i)).toBeVisible();
@@ -22,6 +39,11 @@ test('run scan displays criteria match result from API', async ({ page }) => {
 });
 
 test('partial provider failure does not block another ticker', async ({ page }) => {
+  test.skip(
+    LIVE_PROVIDER_ENABLED,
+    'Deterministic provider-failure assertions only run without live credentials.',
+  );
+
   await page.goto('/');
   await page.getByLabel(/ticker symbol/i).fill('bad');
   await page.getByRole('button', { name: /add ticker/i }).click();

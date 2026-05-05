@@ -80,6 +80,8 @@ Full gate including coverage and E2E:
 npm run quality:full
 ```
 
+`npm run test:e2e` resolves the scan provider before Playwright starts the Next dev server. If `TASTYTRADE_PROVIDER_SECRET` and `TASTYTRADE_REFRESH_TOKEN` are available in the environment or local dotenv files, E2E runs with `SCANNER_PROVIDER=tastytrade` even if `SCANNER_PROVIDER=fake` was set. If those credentials are not available, E2E falls back to `SCANNER_PROVIDER=fake` for deterministic local coverage.
+
 On this Hermes host, Playwright may skip locally if Chromium shared libraries cannot be installed without sudo. GitHub Actions runs the real browser suite using `npx playwright install --with-deps chromium`.
 
 ## Safety
