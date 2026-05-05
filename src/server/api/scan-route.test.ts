@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { DPMCC_ETF_UNIVERSE } from '@/features/scanner/dpmcc-universe';
 import { MAX_SCAN_SYMBOLS } from '@/server/scanner/limits';
 
 const createMarketDataProvider = vi.fn(() => ({ provider: 'mock' }));
@@ -53,6 +54,33 @@ describe('scan API route', () => {
       expect.objectContaining({ symbol: 'SPY', primaryLabel: 'Pass' }),
       expect.objectContaining({ symbol: 'BAD', primaryLabel: 'Insufficient Data' }),
     ]);
+  });
+
+  it('accepts the full DPMCC ETF universe as one public scan request under the default rate gate', async () => {
+    process.env.SCANNER_PROVIDER = 'fake';
+    process.env.SCAN_TRUSTED_CLIENT_IP_HEADER = 'x-test-client-ip';
+    delete process.env.SCAN_MAX_REQUESTS_PER_WINDOW;
+    delete process.env.SCAN_RATE_LIMIT_WINDOW_MS;
+
+    const response = await POST(
+      new Request('http://localhost/api/scan', {
+        method: 'POST',
+        headers: { 'x-test-client-ip': '203.0.113.70' },
+        body: JSON.stringify({ symbols: [...DPMCC_ETF_UNIVERSE] }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      results: Array<{ symbol: string; primaryLabel: string }>;
+    };
+    expect(body.results).toHaveLength(DPMCC_ETF_UNIVERSE.length);
+    expect(scanMany).toHaveBeenCalledTimes(1);
+    expect(scanMany).toHaveBeenCalledWith(
+      [...DPMCC_ETF_UNIVERSE],
+      expect.anything(),
+      expect.any(Object),
+    );
   });
 
   it('rejects oversized content-length before parsing JSON or creating a provider', async () => {
