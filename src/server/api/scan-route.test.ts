@@ -1,12 +1,36 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { POST } from '@/app/api/scan/route';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MAX_SCAN_SYMBOLS } from '@/server/scanner/limits';
+
+const createMarketDataProvider = vi.fn(() => ({ provider: 'mock' }));
+let releaseScan: (() => void) | undefined;
+const scanMany = vi.fn(async (symbols: string[]) =>
+  symbols.map((symbol) => ({
+    symbol,
+    primaryLabel: symbol === 'BAD' ? 'Insufficient Data' : 'Pass',
+  })),
+);
+
+vi.mock('@/server/market-data/provider-factory', () => ({ createMarketDataProvider }));
+vi.mock('@/server/scanner/scan-service', () => ({ scanMany }));
+
+const { POST, resetScanRequestGateForTests } = await import('@/app/api/scan/route');
 
 describe('scan API route', () => {
-  const originalProvider = process.env.SCANNER_PROVIDER;
+  const originalEnv = { ...process.env };
 
   afterEach(() => {
-    if (originalProvider === undefined) delete process.env.SCANNER_PROVIDER;
-    else process.env.SCANNER_PROVIDER = originalProvider;
+    process.env = { ...originalEnv };
+    releaseScan?.();
+    releaseScan = undefined;
+    resetScanRequestGateForTests();
+    createMarketDataProvider.mockClear();
+    scanMany.mockReset();
+    scanMany.mockImplementation(async (symbols: string[]) =>
+      symbols.map((symbol) => ({
+        symbol,
+        primaryLabel: symbol === 'BAD' ? 'Insufficient Data' : 'Pass',
+      })),
+    );
   });
 
   it('returns scanner results for posted tickers', async () => {
@@ -28,8 +52,90 @@ describe('scan API route', () => {
     ]);
   });
 
+  it('rejects oversized content-length before parsing JSON or creating a provider', async () => {
+    const response = await POST(
+      new Request('http://localhost/api/scan', {
+        method: 'POST',
+        headers: { 'content-length': '32769' },
+        body: '{not-json',
+      }),
+    );
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({ error: 'Scan request is too large' });
+    expect(createMarketDataProvider).not.toHaveBeenCalled();
+    expect(scanMany).not.toHaveBeenCalled();
+  });
+
+  it('rejects repeated scan requests beyond the configured rate gate before provider setup', async () => {
+    process.env.SCAN_MAX_REQUESTS_PER_WINDOW = '1';
+    process.env.SCAN_RATE_LIMIT_WINDOW_MS = '60000';
+
+    const first = await POST(
+      new Request('http://localhost/api/scan', {
+        method: 'POST',
+        headers: { 'x-forwarded-for': '203.0.113.10' },
+        body: JSON.stringify({ symbols: ['SPY'] }),
+      }),
+    );
+    expect(first.status).toBe(200);
+    createMarketDataProvider.mockClear();
+    scanMany.mockClear();
+
+    const second = await POST(
+      new Request('http://localhost/api/scan', {
+        method: 'POST',
+        headers: { 'x-forwarded-for': '203.0.113.10' },
+        body: JSON.stringify({ symbols: ['SPY'] }),
+      }),
+    );
+
+    expect(second.status).toBe(429);
+    await expect(second.json()).resolves.toEqual({ error: 'Scan request limit exceeded' });
+    expect(createMarketDataProvider).not.toHaveBeenCalled();
+    expect(scanMany).not.toHaveBeenCalled();
+  });
+
+  it('rejects concurrent scan requests beyond the configured active gate before provider setup', async () => {
+    process.env.SCAN_MAX_ACTIVE_REQUESTS = '1';
+    scanMany.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseScan = () => resolve([{ symbol: 'SPY', primaryLabel: 'Pass' }]);
+        }),
+    );
+
+    const first = POST(
+      new Request('http://localhost/api/scan', {
+        method: 'POST',
+        headers: { 'x-forwarded-for': '203.0.113.20' },
+        body: JSON.stringify({ symbols: ['SPY'] }),
+      }),
+    );
+    await vi.waitFor(() => expect(scanMany).toHaveBeenCalledTimes(1));
+    createMarketDataProvider.mockClear();
+    scanMany.mockClear();
+
+    const second = await POST(
+      new Request('http://localhost/api/scan', {
+        method: 'POST',
+        headers: { 'x-forwarded-for': '203.0.113.21' },
+        body: JSON.stringify({ symbols: ['QQQ'] }),
+      }),
+    );
+
+    expect(second.status).toBe(429);
+    await expect(second.json()).resolves.toEqual({ error: 'Scan request limit exceeded' });
+    expect(createMarketDataProvider).not.toHaveBeenCalled();
+    expect(scanMany).not.toHaveBeenCalled();
+    releaseScan?.();
+    await expect(first).resolves.toHaveProperty('status', 200);
+  });
+
   it('returns a generic error when scan setup fails', async () => {
-    process.env.SCANNER_PROVIDER = 'unsupported-internal-provider-name';
+    createMarketDataProvider.mockImplementationOnce(() => {
+      throw new Error('unsupported-internal-provider-name');
+    });
 
     const response = await POST(
       new Request('http://localhost/api/scan', {
@@ -40,5 +146,20 @@ describe('scan API route', () => {
 
     expect(response.status).toBe(500);
     await expect(response.json()).resolves.toEqual({ error: 'Scan request failed' });
+  });
+
+  it('rejects raw symbol arrays above the cap before filtering duplicates and invalid values', async () => {
+    const symbols = Array.from({ length: MAX_SCAN_SYMBOLS + 1 }, () => 'SPY');
+
+    const response = await POST(
+      new Request('http://localhost/api/scan', {
+        method: 'POST',
+        body: JSON.stringify({ symbols }),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(createMarketDataProvider).not.toHaveBeenCalled();
+    expect(scanMany).not.toHaveBeenCalled();
   });
 });

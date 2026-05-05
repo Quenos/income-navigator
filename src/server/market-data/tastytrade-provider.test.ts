@@ -85,6 +85,10 @@ class StubTastytradePort implements TastytradeReadOnlyPort {
 class ChunkSensitiveTastytradePort extends StubTastytradePort {
   readonly optionMarketDataBatchSizes: number[] = [];
   readonly optionGreeksBatchSizes: number[] = [];
+  optionMarketDataActive = 0;
+  optionGreeksActive = 0;
+  maxOptionMarketDataActive = 0;
+  maxOptionGreeksActive = 0;
 
   async getOptionChain(): Promise<Record<string, Option[]>> {
     return {
@@ -109,17 +113,34 @@ class ChunkSensitiveTastytradePort extends StubTastytradePort {
   }
 
   async getOptionMarketData(symbols: readonly string[]) {
-    this.optionMarketDataBatchSizes.push(symbols.length);
-    if (symbols.length > 100) throw new Error('request URI would be too large');
-    return symbols.map((symbol) =>
-      marketData({ symbol, bid: '1.6', ask: '1.7', updated_at: isoNow }),
+    this.optionMarketDataActive += 1;
+    this.maxOptionMarketDataActive = Math.max(
+      this.maxOptionMarketDataActive,
+      this.optionMarketDataActive,
     );
+    try {
+      await Promise.resolve();
+      this.optionMarketDataBatchSizes.push(symbols.length);
+      if (symbols.length > 100) throw new Error('request URI would be too large');
+      return symbols.map((symbol) =>
+        marketData({ symbol, bid: '1.6', ask: '1.7', updated_at: isoNow }),
+      );
+    } finally {
+      this.optionMarketDataActive -= 1;
+    }
   }
 
   async getOptionGreeks(symbols: readonly string[]) {
-    this.optionGreeksBatchSizes.push(symbols.length);
-    if (symbols.length > 100) throw new Error('subscription batch too large');
-    return symbols.map((symbol) => ({ symbol, delta: symbol.includes('270116') ? 0.8 : 0.35 }));
+    this.optionGreeksActive += 1;
+    this.maxOptionGreeksActive = Math.max(this.maxOptionGreeksActive, this.optionGreeksActive);
+    try {
+      await Promise.resolve();
+      this.optionGreeksBatchSizes.push(symbols.length);
+      if (symbols.length > 100) throw new Error('subscription batch too large');
+      return symbols.map((symbol) => ({ symbol, delta: symbol.includes('270116') ? 0.8 : 0.35 }));
+    } finally {
+      this.optionGreeksActive -= 1;
+    }
   }
 }
 
@@ -253,6 +274,8 @@ describe('TastyTrade read-only adapter', () => {
     expect(Math.max(...port.optionGreeksBatchSizes)).toBeLessThanOrEqual(100);
     expect(port.optionMarketDataBatchSizes.length).toBeGreaterThan(1);
     expect(port.optionGreeksBatchSizes.length).toBeGreaterThan(1);
+    expect(port.maxOptionMarketDataActive).toBe(1);
+    expect(port.maxOptionGreeksActive).toBe(1);
   });
 
   it('returns options-unavailable when TastyTrade confirms the underlying has no option chain', async () => {

@@ -305,6 +305,17 @@ async function collectEvents<T>(
   return events;
 }
 
+async function collectBatchesSequentially<T, R>(
+  batches: readonly T[][],
+  loadBatch: (batch: T[]) => Promise<readonly R[]>,
+): Promise<R[]> {
+  const results: R[] = [];
+  for (const batch of batches) {
+    results.push(...(await loadBatch(batch)));
+  }
+  return results;
+}
+
 class SdkTastytradeReadOnlyPort implements TastytradeReadOnlyPort {
   readonly #session: ReadOnlySession;
 
@@ -399,17 +410,13 @@ export class TastytradeMarketDataProvider implements MarketDataProvider, Tastytr
   async getOptionMarketData(symbols: readonly string[]): Promise<MarketData[]> {
     if (!this.#port) throw new Error('TastyTrade read-only provider is not configured');
     const batches = chunks(symbols, MAX_TASTYTRADE_SYMBOLS_PER_REQUEST);
-    const results = await Promise.all(
-      batches.map((batch) => this.#port!.getOptionMarketData(batch)),
-    );
-    return results.flat();
+    return collectBatchesSequentially(batches, (batch) => this.#port!.getOptionMarketData(batch));
   }
 
   async getOptionGreeks(symbols: readonly string[]): Promise<TastytradeGreekSnapshot[]> {
     if (!this.#port) throw new Error('TastyTrade read-only provider is not configured');
     const batches = chunks(symbols, MAX_TASTYTRADE_SYMBOLS_PER_REQUEST);
-    const results = await Promise.all(batches.map((batch) => this.#port!.getOptionGreeks(batch)));
-    return results.flat();
+    return collectBatchesSequentially(batches, (batch) => this.#port!.getOptionGreeks(batch));
   }
 
   async getDailyCandles(symbol: string): Promise<TastytradeCandleSnapshot[]> {
@@ -468,12 +475,15 @@ export class TastytradeMarketDataProvider implements MarketDataProvider, Tastytr
 
       const symbols = callInstruments.map((option) => optionSymbol(option)!);
       const optionQuotes = await this.getOptionMarketData(symbols);
-      const [optionGreeksResult, dailyCandlesResult, weeklyCandlesResult] =
-        await Promise.allSettled([
-          this.getOptionGreeks(symbols),
-          this.getDailyCandles(normalized),
-          this.getWeeklyCandles(normalized),
-        ]);
+      const optionGreeksResult = await this.getOptionGreeks(symbols)
+        .then((value) => ({ status: 'fulfilled' as const, value }))
+        .catch(() => ({ status: 'rejected' as const }));
+      const dailyCandlesResult = await this.getDailyCandles(normalized)
+        .then((value) => ({ status: 'fulfilled' as const, value }))
+        .catch(() => ({ status: 'rejected' as const }));
+      const weeklyCandlesResult = await this.getWeeklyCandles(normalized)
+        .then((value) => ({ status: 'fulfilled' as const, value }))
+        .catch(() => ({ status: 'rejected' as const }));
       const optionGreeks =
         optionGreeksResult.status === 'fulfilled' ? optionGreeksResult.value : [];
       const dailyCandles =

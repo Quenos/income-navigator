@@ -15,8 +15,14 @@ describe('scan request schema', () => {
     ]);
   });
 
-  it('rejects more than the server-side unique ticker cap', () => {
+  it('rejects more than the server-side raw ticker cap', () => {
     const symbols = Array.from({ length: MAX_SCAN_SYMBOLS + 1 }, (_value, index) => `T${index}`);
+
+    expect(() => parseScanRequestBody({ symbols })).toThrow(`${MAX_SCAN_SYMBOLS} or fewer`);
+  });
+
+  it('rejects over-cap raw arrays even when duplicates would normalize under the cap', () => {
+    const symbols = Array.from({ length: MAX_SCAN_SYMBOLS + 1 }, () => 'SPY');
 
     expect(() => parseScanRequestBody({ symbols })).toThrow(`${MAX_SCAN_SYMBOLS} or fewer`);
   });
