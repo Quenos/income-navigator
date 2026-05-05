@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { defaultScannerSettings } from '@/domain/scanner/settings';
+import { MAX_SCAN_SYMBOLS } from '@/server/scanner/limits';
 import { parseScanRequestBody } from './scan-schema';
 
 describe('scan request schema', () => {
@@ -12,6 +13,12 @@ describe('scan request schema', () => {
       'SPY',
       'QQQ',
     ]);
+  });
+
+  it('rejects more than the server-side unique ticker cap', () => {
+    const symbols = Array.from({ length: MAX_SCAN_SYMBOLS + 1 }, (_value, index) => `T${index}`);
+
+    expect(() => parseScanRequestBody({ symbols })).toThrow(`${MAX_SCAN_SYMBOLS} or fewer`);
   });
 
   it('rejects invalid settings', () => {

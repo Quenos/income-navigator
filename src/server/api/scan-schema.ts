@@ -3,6 +3,7 @@ import {
   validateScannerSettings,
   type ScannerSettings,
 } from '@/domain/scanner/settings';
+import { MAX_SCAN_SYMBOLS } from '@/server/scanner/limits';
 
 export interface NormalizedScanRequest {
   symbols: string[];
@@ -20,6 +21,9 @@ function normalizeSymbols(value: unknown): string[] {
     ),
   ];
   if (symbols.length === 0) throw new Error('symbols must be a non-empty array');
+  if (symbols.length > MAX_SCAN_SYMBOLS) {
+    throw new Error(`symbols must include ${MAX_SCAN_SYMBOLS} or fewer unique valid tickers`);
+  }
   return symbols;
 }
 

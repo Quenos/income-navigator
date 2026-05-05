@@ -528,14 +528,13 @@ export class TastytradeMarketDataProvider implements MarketDataProvider, Tastytr
       };
 
       return { ok: true, snapshot };
-    } catch (error) {
+    } catch {
       return {
         ok: false,
         symbol: normalized,
         error: {
           code: 'provider-unavailable',
-          message:
-            error instanceof Error ? error.message : 'TastyTrade market data provider unavailable',
+          message: 'TastyTrade market data provider unavailable',
         },
       };
     }
