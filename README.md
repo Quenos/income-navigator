@@ -23,7 +23,18 @@ The default development provider is the deterministic fake fixture provider:
 SCANNER_PROVIDER=fake
 ```
 
-Live TastyTrade access is not required for tests. The TastyTrade adapter is a read-only shell behind `MarketDataProvider` and currently uses the local packaged `tastytrade-ts-sdk` tarball because the upstream package is not yet published on npm and direct GitHub install was verified as broken. Replace the local tarball once the SDK has a working distribution path.
+To run development against live read-only TastyTrade market data, create `.env.local` with:
+
+```dotenv
+SCANNER_PROVIDER=tastytrade
+TASTYTRADE_PROVIDER_SECRET=<provider-credential>
+TASTYTRADE_REFRESH_TOKEN=<refresh-token>
+TASTYTRADE_ACCOUNT_ID=<account-number>
+# Defaults to true. Set false only when intentionally using the production TastyTrade environment.
+TASTYTRADE_IS_TEST=true
+```
+
+The TastyTrade provider is read-only behind `MarketDataProvider`. It fetches the underlying quote, call option chain, option quotes, option greeks, and daily/weekly candle snapshots, then normalizes them into the scanner's `MarketDataSnapshot`. Live TastyTrade access is not required for tests. The app currently uses the local packaged `tastytrade-ts-sdk` tarball because the upstream package is not yet published on npm and direct GitHub install was verified as broken. Replace the local tarball once the SDK has a working distribution path.
 
 Never put credentials in git, logs, docs, fixtures, screenshots, or test output.
 

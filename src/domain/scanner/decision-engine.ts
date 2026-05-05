@@ -15,7 +15,12 @@ import {
   selectShortCallCandidate,
   weeklyizedExtrinsicForShortCall,
 } from './short-call-selection';
-import { evaluatePullbackRule, evaluateRsiIdeal, evaluateWeeklyTrend } from './technical-rules';
+import {
+  compareIndicatorDirection,
+  evaluatePullbackRule,
+  evaluateRsiIdeal,
+  evaluateWeeklyTrend,
+} from './technical-rules';
 import { classifyTrendRegime } from './trend-regime';
 import type {
   MarketDataSnapshot,
@@ -124,12 +129,16 @@ export function evaluateScannerSnapshot(
   }
 
   const rsi = evaluateRsiIdeal(snapshot.technicals);
+  const rsiDirection = compareIndicatorDirection(
+    snapshot.technicals.rsi14,
+    snapshot.technicals.rsi14ThreeTradingDaysAgo,
+  );
   conditions.push(rsi);
   ruleOutcomes.push({
     id: 'rsi',
-    label: 'Daily RSI(14) under 50 and rising',
+    label: 'Daily RSI(14) under 50; direction vs 3 trading days ago',
     condition: rsi,
-    message: `${snapshot.technicals.rsi14 ?? 'missing'} vs ${snapshot.technicals.rsi14ThreeTradingDaysAgo ?? 'missing'}`,
+    message: `${snapshot.technicals.rsi14 ?? 'missing'} vs ${snapshot.technicals.rsi14ThreeTradingDaysAgo ?? 'missing'} (${rsiDirection})`,
   });
   if (rsi === 'watch') notes.push('RSI Not Ideal');
 

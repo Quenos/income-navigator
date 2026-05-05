@@ -4,8 +4,13 @@ export interface ScanResponse {
   results: ScannerResult[];
 }
 
+function getScanApiPath() {
+  const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? '';
+  return `${basePath}/api/scan`;
+}
+
 export async function runScanner(symbols: string[]): Promise<ScanResponse> {
-  const response = await fetch('/api/scan', {
+  const response = await fetch(getScanApiPath(), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ symbols }),

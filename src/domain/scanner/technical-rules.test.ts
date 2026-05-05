@@ -1,11 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { evaluatePullbackRule, evaluateRsiIdeal, evaluateWeeklyTrend } from './technical-rules';
+import {
+  compareIndicatorDirection,
+  evaluatePullbackRule,
+  evaluateRsiIdeal,
+  evaluateWeeklyTrend,
+} from './technical-rules';
 
 describe('technical rules', () => {
   it('passes weekly trend only when 8EMA is greater than 21EMA', () => {
     expect(evaluateWeeklyTrend({ weekly8Ema: 101, weekly21Ema: 100 })).toBe('pass');
     expect(evaluateWeeklyTrend({ weekly8Ema: 100, weekly21Ema: 100 })).toBe('fail');
     expect(evaluateWeeklyTrend({ weekly8Ema: 99, weekly21Ema: 100 })).toBe('fail');
+  });
+
+  it('classifies indicator direction against a previous value', () => {
+    expect(compareIndicatorDirection(38.51, 38.72)).toBe('falling');
+    expect(compareIndicatorDirection(47, 42)).toBe('rising');
+    expect(compareIndicatorDirection(50, 50)).toBe('flat');
+    expect(compareIndicatorDirection(undefined, 42)).toBe('unknown');
   });
 
   it('marks RSI ideal only when under 50 and rising', () => {

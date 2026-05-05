@@ -60,10 +60,13 @@ export interface OptionContractSnapshot {
 
 export interface TechnicalSnapshot {
   weekly8Ema?: number;
+  weekly8EmaSlopePercent?: number;
   weekly21Ema?: number;
+  weekly21EmaSlopePercent?: number;
   daily50Ema?: number;
   daily150Sma?: number;
   daily200Sma?: number;
+  daily200SmaSlopePercent?: number;
   rsi14?: number;
   rsi14ThreeTradingDaysAgo?: number;
   candleDataTime?: string;

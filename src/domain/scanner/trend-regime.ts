@@ -2,24 +2,48 @@ import type { MarketDataSnapshot, TrendRegime } from './types';
 
 export function classifyTrendRegime(snapshot: MarketDataSnapshot): TrendRegime {
   if (snapshot.trendRegime) return snapshot.trendRegime;
-  const { weekly8Ema, weekly21Ema, daily200Sma } = snapshot.technicals;
+
+  const {
+    weekly8Ema,
+    weekly8EmaSlopePercent,
+    weekly21Ema,
+    weekly21EmaSlopePercent,
+    daily200Sma,
+    daily200SmaSlopePercent,
+  } = snapshot.technicals;
+  const { currentPrice } = snapshot;
+
   if (
+    currentPrice === undefined ||
     weekly8Ema === undefined ||
+    weekly8EmaSlopePercent === undefined ||
     weekly21Ema === undefined ||
-    snapshot.currentPrice === undefined
+    weekly21EmaSlopePercent === undefined ||
+    daily200Sma === undefined ||
+    daily200SmaSlopePercent === undefined
   ) {
     return 'Unclear';
   }
-  if (weekly8Ema < weekly21Ema) return 'Downtrend';
+
   if (
     weekly8Ema > weekly21Ema &&
-    daily200Sma !== undefined &&
-    snapshot.currentPrice >= daily200Sma * 0.98
+    weekly21Ema > daily200Sma &&
+    currentPrice > weekly21Ema &&
+    weekly8EmaSlopePercent > 0 &&
+    weekly21EmaSlopePercent > 0 &&
+    daily200SmaSlopePercent > 0
   ) {
     return 'Strong Uptrend';
   }
-  if (Math.abs(weekly8Ema - weekly21Ema) / Math.max(weekly21Ema, 1) <= 0.02) {
-    return 'Neutral / Sideways';
+
+  if (
+    weekly8Ema < weekly21Ema &&
+    currentPrice < weekly8Ema &&
+    weekly8EmaSlopePercent < 0 &&
+    weekly21EmaSlopePercent < 0
+  ) {
+    return 'Downtrend';
   }
-  return 'Unclear';
+
+  return 'Neutral / Sideways';
 }

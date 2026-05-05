@@ -24,6 +24,19 @@ describe('scanner decision engine', () => {
     expect(result.notes).toContain('RSI Not Ideal');
   });
 
+  it('shows RSI direction explicitly in the rule outcome message', () => {
+    const result = evaluateScannerSnapshot(
+      fixture({ technicals: { rsi14: 38.51, rsi14ThreeTradingDaysAgo: 38.72 } }),
+    );
+    const rsiOutcome = result.ruleOutcomes.find((rule) => rule.id === 'rsi');
+
+    expect(rsiOutcome).toMatchObject({
+      label: 'Daily RSI(14) under 50; direction vs 3 trading days ago',
+      condition: 'watch',
+      message: '38.51 vs 38.72 (falling)',
+    });
+  });
+
   it('downgrades otherwise valid setup to Watch when no pullback is present', () => {
     const result = evaluateScannerSnapshot(
       fixture({ technicals: { daily50Ema: 90, daily150Sma: 88, daily200Sma: 87 } }),

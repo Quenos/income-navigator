@@ -1,6 +1,18 @@
 import { calculatePullbackDistance } from './calculations';
 import type { ResultCondition, TechnicalSnapshot } from './types';
 
+export type IndicatorDirection = 'rising' | 'falling' | 'flat' | 'unknown';
+
+export function compareIndicatorDirection(
+  current: number | undefined,
+  previous: number | undefined,
+): IndicatorDirection {
+  if (current === undefined || previous === undefined) return 'unknown';
+  if (current > previous) return 'rising';
+  if (current < previous) return 'falling';
+  return 'flat';
+}
+
 export function evaluateWeeklyTrend(
   technicals: Pick<TechnicalSnapshot, 'weekly8Ema' | 'weekly21Ema'>,
 ): ResultCondition {

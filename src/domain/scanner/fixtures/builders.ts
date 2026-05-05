@@ -19,10 +19,13 @@ export function option(overrides: Partial<OptionContractSnapshot> = {}): OptionC
 export function technicals(overrides: Partial<TechnicalSnapshot> = {}): TechnicalSnapshot {
   return {
     weekly8Ema: 105,
+    weekly8EmaSlopePercent: 2,
     weekly21Ema: 100,
+    weekly21EmaSlopePercent: 1,
     daily50Ema: 96,
     daily150Sma: 95,
     daily200Sma: 90,
+    daily200SmaSlopePercent: 0.5,
     rsi14: 47,
     rsi14ThreeTradingDaysAgo: 42,
     candleDataTime: fixtureNow,

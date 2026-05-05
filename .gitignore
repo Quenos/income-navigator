@@ -19,6 +19,7 @@ playwright-report/
 # env/secrets
 .env
 .env*.local
+.env*.save
 !.env.example
 
 # logs

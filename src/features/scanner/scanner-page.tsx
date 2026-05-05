@@ -7,14 +7,30 @@ import { Disclaimer } from './components/disclaimer';
 import { ScanResultsTable } from './components/scan-results-table';
 import { TickerChipList } from './components/ticker-chip-list';
 import { TickerInput } from './components/ticker-input';
+import { DPMCC_ETF_UNIVERSE } from './dpmcc-universe';
 import { useScanner } from './use-scanner';
+
+type ActiveScan = 'custom' | 'universe' | null;
 
 export function ScannerPage() {
   const [symbols, setSymbols] = useState<string[]>(['SPY']);
-  const { results, loading, error, scan } = useScanner();
+  const [activeScan, setActiveScan] = useState<ActiveScan>(null);
+  const { results, loading, error, passOnly, scan } = useScanner();
 
   function addSymbol(symbol: string) {
     setSymbols((existing) => Array.from(new Set([...existing, symbol])));
+  }
+
+  async function runCustomScan() {
+    setActiveScan('custom');
+    await scan(symbols);
+    setActiveScan(null);
+  }
+
+  async function runUniverseScan() {
+    setActiveScan('universe');
+    await scan([...DPMCC_ETF_UNIVERSE], { passOnly: true });
+    setActiveScan(null);
   }
 
   return (
@@ -42,14 +58,30 @@ export function ScannerPage() {
             setSymbols((existing) => existing.filter((item) => item !== symbol))
           }
         />
-        <Button disabled={symbols.length === 0 || loading} onClick={() => scan(symbols)}>
-          {loading ? 'Scanning…' : 'Run Scan'}
-        </Button>
+        <div className="flex flex-wrap gap-3">
+          <Button disabled={symbols.length === 0 || loading} onClick={runCustomScan}>
+            {activeScan === 'custom' ? 'Scanning…' : 'Run Scan'}
+          </Button>
+          <Button className="bg-emerald-700" disabled={loading} onClick={runUniverseScan}>
+            {activeScan === 'universe' ? 'Scanning DPMCC ETF universe…' : 'Scan DPMCC ETF universe'}
+          </Button>
+        </div>
+        <p className="text-sm text-slate-600">
+          Universe scan checks {DPMCC_ETF_UNIVERSE.length} deduplicated liquid ETFs and displays
+          pass results only.
+        </p>
         {error && <p className="text-sm text-rose-700">{error}</p>}
       </Card>
 
       <section className="space-y-4">
-        <h2 className="text-xl font-semibold text-slate-950">Criteria Match Results</h2>
+        <div>
+          <h2 className="text-xl font-semibold text-slate-950">Criteria Match Results</h2>
+          {passOnly && (
+            <p className="mt-1 text-sm text-slate-600">
+              Showing pass results only from the DPMCC ETF universe scan.
+            </p>
+          )}
+        </div>
         <ScanResultsTable results={results} />
       </section>
     </main>
