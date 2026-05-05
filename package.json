@@ -3,9 +3,6 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": {
-    "income-navigator": "src/cli/main.ts"
-  },
   "scripts": {
     "cli": "tsx src/cli/main.ts",
     "dev": "next dev",

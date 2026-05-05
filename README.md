@@ -40,7 +40,9 @@ Never put credentials in git, logs, docs, fixtures, screenshots, or test output.
 
 ## CLI
 
-Run scans from the terminal with the same read-only provider selected by `SCANNER_PROVIDER`:
+Run local development scans from the terminal with the same read-only provider selected by
+`SCANNER_PROVIDER`. The CLI is intentionally documented as a local development entry point; this
+private app does not publish a compiled runtime-safe package bin.
 
 ```bash
 # Explicit tickers with progress status on stderr and a table on stdout
@@ -50,13 +52,13 @@ SCANNER_PROVIDER=fake npm run cli -- scan SPY QQQ
 SCANNER_PROVIDER=fake npm run cli -- scan --universe dpmcc --pass-only
 
 # Machine-readable output
-SCANNER_PROVIDER=fake npm run cli -- scan SPY --json
+SCANNER_PROVIDER=fake npm run --silent cli -- scan SPY --json
 ```
 
-The installed package bin is also named `income-navigator`, so local package execution works after `npm install`:
+Direct `tsx` execution also keeps JSON stdout parseable:
 
 ```bash
-SCANNER_PROVIDER=fake npm exec -- income-navigator scan SPY QQQ
+SCANNER_PROVIDER=fake npx tsx src/cli/main.ts scan SPY --json
 ```
 
 The CLI scans sequentially and prints the active ticker status, for example `Scanning SPY (1 of 41)…`, before each provider call. Use `SCANNER_PROVIDER=tastytrade` with the TastyTrade environment variables above for live read-only market data.
