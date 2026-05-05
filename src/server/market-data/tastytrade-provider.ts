@@ -231,6 +231,21 @@ function optionsNearAtmFirst(options: readonly Option[], stockPrice: number): Op
   });
 }
 
+function optionDelta(snapshot: LoadedOptionSnapshot): number | undefined {
+  return decimalToNumber(snapshot.greek?.delta) ?? decimalToNumber(snapshot.quote?.delta);
+}
+
+function loadedDeltasCoverScannerBands(loaded: readonly LoadedOptionSnapshot[]): boolean {
+  const deltas = loaded
+    .map((snapshot) => optionDelta(snapshot))
+    .filter((delta): delta is number => delta !== undefined);
+  return (
+    deltas.length > 0 &&
+    deltas.some((delta) => delta <= OPTION_DELTA_SCAN_MIN + 1e-6) &&
+    deltas.some((delta) => delta >= OPTION_DELTA_SCAN_MAX - 1e-6)
+  );
+}
+
 function simpleMovingAverage(values: number[], period: number): number | undefined {
   if (values.length < period) return undefined;
   const window = values.slice(-period);
@@ -537,23 +552,13 @@ export class TastytradeMarketDataProvider implements MarketDataProvider, Tastytr
     const loaded: LoadedOptionSnapshot[] = [];
     for (const expirationOptions of relevantGroups) {
       const ordered = optionsNearAtmFirst(expirationOptions, stockPrice);
-      let scannedBatches = 0;
+      const loadedForExpiration: LoadedOptionSnapshot[] = [];
       for (const batch of chunks(ordered, OPTION_DELTA_SCAN_BATCH_SIZE)) {
-        scannedBatches += 1;
         const loadedBatch = await this.#loadOptionBatch(batch);
         loaded.push(...loadedBatch);
+        loadedForExpiration.push(...loadedBatch);
 
-        const deltas = loadedBatch
-          .map(({ greek, quote }) => decimalToNumber(greek?.delta) ?? decimalToNumber(quote?.delta))
-          .filter((delta): delta is number => delta !== undefined);
-        if (
-          scannedBatches >= 2 ||
-          (deltas.length > 0 &&
-            deltas.some((delta) => delta <= OPTION_DELTA_SCAN_MIN) &&
-            deltas.some((delta) => delta >= OPTION_DELTA_SCAN_MAX))
-        ) {
-          break;
-        }
+        if (loadedDeltasCoverScannerBands(loadedForExpiration)) break;
       }
     }
     return loaded.filter(({ greek, quote }) => {

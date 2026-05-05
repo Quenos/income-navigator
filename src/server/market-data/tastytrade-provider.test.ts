@@ -94,8 +94,8 @@ class ChunkSensitiveTastytradePort extends StubTastytradePort {
     return {
       '2026-05-15': Array.from({ length: 205 }, (_, index) =>
         callOption({
-          symbol: `SPY  260515C${String(90000 + index * 100).padStart(8, '0')}`,
-          streamer_symbol: `SPY260515C${String(90000 + index * 100).padStart(8, '0')}`,
+          symbol: `SPY  260515C${String((90 + index) * 1000).padStart(8, '0')}`,
+          streamer_symbol: `SPY260515C${String((90 + index) * 1000).padStart(8, '0')}`,
           days_to_expiration: 14,
           strike_price: String(90 + index),
         }),
@@ -148,6 +148,45 @@ class ChunkSensitiveTastytradePort extends StubTastytradePort {
     } finally {
       this.optionGreeksActive -= 1;
     }
+  }
+}
+
+class DenseLongCallTastytradePort extends StubTastytradePort {
+  async getOptionChain(): Promise<Record<string, Option[]>> {
+    return {
+      '2026-05-15': [
+        callOption({
+          symbol: 'SPY  260515C00105000',
+          days_to_expiration: 14,
+          strike_price: '105',
+        }),
+      ],
+      '2027-01-16': Array.from({ length: 101 }, (_, index) => {
+        const strike = 50 + index;
+        return callOption({
+          symbol: `SPY  270116C${String(strike * 1000).padStart(8, '0')}`,
+          streamer_symbol: `SPY270116C${String(strike * 1000).padStart(8, '0')}`,
+          expiration_date: '2027-01-16',
+          days_to_expiration: 257,
+          strike_price: String(strike),
+        });
+      }),
+    };
+  }
+
+  async getOptionMarketData(symbols: readonly string[]) {
+    return symbols.map((symbol) =>
+      marketData({ symbol, bid: '21', ask: '21.5', updated_at: isoNow }),
+    );
+  }
+
+  async getOptionGreeks(symbols: readonly string[]) {
+    return symbols.map((symbol) => {
+      const strikeCode = Number(/C(\d+)$/.exec(symbol.replaceAll(' ', ''))?.[1] ?? '100000');
+      const strike = strikeCode / 1000;
+      const delta = Math.max(0.05, Math.min(0.95, 0.5 - (strike - 100) * 0.0075));
+      return { symbol, delta };
+    });
   }
 }
 
@@ -283,6 +322,26 @@ describe('TastyTrade read-only adapter', () => {
     expect(port.optionGreeksBatchSizes.reduce((sum, size) => sum + size, 0)).toBeLessThan(206);
     expect(port.maxOptionMarketDataActive).toBe(1);
     expect(port.maxOptionGreeksActive).toBe(1);
+  });
+
+  it('continues scanning dense long-call chains until a qualifying ITM delta is loaded', async () => {
+    const provider = new TastytradeMarketDataProvider({
+      readOnlyPort: new DenseLongCallTastytradePort(),
+      now: () => new Date(isoNow),
+    });
+
+    const result = await provider.getMarketDataForTicker('spy');
+
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) throw new Error('expected dense-chain scan to succeed');
+    expect(result.snapshot.calls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          expiration: '2027-01-16',
+          delta: expect.closeTo(0.725, 6),
+        }),
+      ]),
+    );
   });
 
   it('returns options-unavailable when TastyTrade confirms the underlying has no option chain', async () => {

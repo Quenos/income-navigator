@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { DPMCC_ETF_UNIVERSE } from '../src/features/scanner/dpmcc-universe';
 
 const LIVE_PROVIDER_ENABLED = process.env.SCANNER_PROVIDER === 'tastytrade';
 
@@ -68,26 +69,27 @@ function scannerResult(symbol: string, primaryLabel: 'Pass' | 'Fail' = 'Fail') {
   };
 }
 
-test('preset DPMCC universe scan runs tickers individually and displays current progress', async ({
+test('preset DPMCC universe scan submits one batched request and displays progress', async ({
   page,
 }) => {
   const submittedBatches: string[][] = [];
-  let releaseFirstRequest!: () => void;
-  const firstRequestCanFinish = new Promise<void>((resolve) => {
-    releaseFirstRequest = resolve;
+  let releaseRequest!: () => void;
+  const requestCanFinish = new Promise<void>((resolve) => {
+    releaseRequest = resolve;
   });
 
   await page.route('**/api/scan', async (route) => {
     const requestBody = route.request().postDataJSON() as { symbols: string[] };
     submittedBatches.push(requestBody.symbols);
-    const symbol = requestBody.symbols[0] ?? 'UNKNOWN';
 
-    if (submittedBatches.length === 1) await firstRequestCanFinish;
+    await requestCanFinish;
 
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
-        results: [scannerResult(symbol, symbol === 'SPY' ? 'Pass' : 'Fail')],
+        results: requestBody.symbols.map((symbol) =>
+          scannerResult(symbol, symbol === 'SPY' ? 'Pass' : 'Fail'),
+        ),
       }),
     });
   });
@@ -95,56 +97,62 @@ test('preset DPMCC universe scan runs tickers individually and displays current 
   await page.goto('/');
   await page.getByRole('button', { name: /scan dpmcc etf universe/i }).click();
 
-  await expect(page.getByText('Scanning SPY (1 of 41)…')).toBeVisible();
-  expect(submittedBatches).toEqual([['SPY']]);
+  await expect(page.getByText('Scanning DPMCC ETF universe…')).toBeVisible();
+  expect(submittedBatches).toEqual([[...DPMCC_ETF_UNIVERSE]]);
 
-  releaseFirstRequest();
+  releaseRequest();
 
   await expect(page.getByText('Completed 41 of 41 tickers.')).toBeVisible();
-  expect(submittedBatches).toHaveLength(41);
-  expect(submittedBatches.every((batch) => batch.length === 1)).toBe(true);
-  expect(submittedBatches.flat()).toEqual(expect.arrayContaining(['SPY', 'QQQ', 'IBIT']));
+  expect(submittedBatches).toHaveLength(1);
   await expect(page.getByText(/showing pass results only/i)).toBeVisible();
   await expect(page.getByRole('heading', { name: 'SPY' })).toBeVisible();
   await expect(page.getByText('Criteria Match', { exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'QQQ' })).toHaveCount(0);
 });
 
-test('preset DPMCC universe scan continues when one ticker returns non-JSON HTML', async ({
+test('preset DPMCC universe scan uses one real API request under default route limits', async ({
   page,
 }) => {
+  test.skip(
+    LIVE_PROVIDER_ENABLED,
+    'Deterministic route-limit assertions only run with the fake provider.',
+  );
+
+  const apiResponses: Array<{ status: number; url: string }> = [];
+  page.on('response', (response) => {
+    if (response.url().includes('/api/scan')) {
+      apiResponses.push({ status: response.status(), url: response.url() });
+    }
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: /scan dpmcc etf universe/i }).click();
+
+  await expect(page.getByText('Completed 41 of 41 tickers.')).toBeVisible({ timeout: 60_000 });
+  expect(apiResponses).toHaveLength(1);
+  expect(apiResponses[0]?.status).toBe(200);
+  expect(apiResponses.some((response) => response.status === 429)).toBe(false);
+  await expect(page.getByText(/showing pass results only/i)).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'SPY' })).toBeVisible();
+});
+
+test('preset DPMCC universe scan reports a batched request failure', async ({ page }) => {
   const submittedBatches: string[][] = [];
 
   await page.route('**/api/scan', async (route) => {
     const requestBody = route.request().postDataJSON() as { symbols: string[] };
     submittedBatches.push(requestBody.symbols);
-    const symbol = requestBody.symbols[0] ?? 'UNKNOWN';
-
-    if (symbol === 'SPY') {
-      await route.fulfill({
-        status: 504,
-        contentType: 'text/html',
-        body: '<html> <h1>Gateway Timeout</h1></html>',
-      });
-      return;
-    }
-
     await route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify({
-        results: [scannerResult(symbol, symbol === 'QQQ' ? 'Pass' : 'Fail')],
-      }),
+      status: 504,
+      contentType: 'text/html',
+      body: '<html> <h1>Gateway Timeout</h1></html>',
     });
   });
 
   await page.goto('/');
   await page.getByRole('button', { name: /scan dpmcc etf universe/i }).click();
 
-  await expect(page.getByText('Completed 41 of 41 tickers.')).toBeVisible();
-  expect(submittedBatches).toHaveLength(41);
-  await expect(
-    page.getByText(/Some tickers could not be scanned \(1\): SPY: Scan request failed \(504\)/),
-  ).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'QQQ' })).toBeVisible();
+  await expect(page.getByText(/Scan request failed \(504\)/)).toBeVisible();
+  expect(submittedBatches).toEqual([[...DPMCC_ETF_UNIVERSE]]);
   await expect(page.getByRole('heading', { name: 'SPY' })).toHaveCount(0);
 });

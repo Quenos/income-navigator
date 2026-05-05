@@ -29,7 +29,7 @@ export function ScannerPage() {
 
   async function runUniverseScan() {
     setActiveScan('universe');
-    await scan([...DPMCC_ETF_UNIVERSE], { passOnly: true, perTicker: true });
+    await scan([...DPMCC_ETF_UNIVERSE], { passOnly: true });
     setActiveScan(null);
   }
 
@@ -68,8 +68,8 @@ export function ScannerPage() {
         </div>
         <p className="text-sm text-slate-600">
           Universe scan checks {DPMCC_ETF_UNIVERSE.length} deduplicated liquid ETFs and displays
-          pass results only. Each ticker is scanned individually so live provider progress is
-          visible.
+          pass results only. The full universe is submitted as one batched scan request to stay
+          within public route limits.
         </p>
         {progress && progress.total > 0 && (
           <p aria-live="polite" className="text-sm font-medium text-slate-700">
